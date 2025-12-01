@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    body { font-family: Arial, sans-serif; padding: 16px; }
+    .account-card { border: 1px solid #e0e0e0; padding: 10px; border-radius: 8px; margin-bottom: 10px; box-shadow: 0 1px 2px rgba(0,0,0,0.08); }
+    .account-name { font-weight: bold; font-size: 14px; }
+    .institution { color: #5f6368; font-size: 12px; }
+    .balance { color: #1a73e8; font-size: 14px; margin-top: 4px; }
+    .status { font-size: 12px; color: #34a853; }
+    .btn { background: #1a73e8; color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; margin-bottom: 10px; }
+    .btn:hover { opacity: 0.95; }
+  </style>
+</head>
+<body>
+  <button class="btn" id="refresh">Refresh Accounts</button>
+  <div id="content"></div>
+
+  <script>
+    function loadAccounts() {
+      google.script.run
+        .withSuccessHandler(renderAccounts)
+        .withFailureHandler(showError)
+        .getAccountsForSidebar();
+    }
+
+    function renderAccounts(accounts) {
+      const container = document.getElementById('content');
+      if (accounts.error) { showError(accounts); return; }
+      container.innerHTML = accounts.length === 0 ? '<p>No accounts connected yet.</p>' : '';
+      accounts.forEach(function(acc) {
+        const card = document.createElement('div');
+        card.className = 'account-card';
+        card.innerHTML = `
+          <div class="account-name">${acc.name}</div>
+          <div class="institution">${acc.institution}</div>
+          <div class="balance">$${acc.balance.toLocaleString()}</div>
+          <div class="status">✓ ${acc.status}</div>
+        `;
+        container.appendChild(card);
+      });
+    }
+
+    function showError(e) {
+      document.getElementById('content').innerHTML = '<p style="color:red;">Error: ' + (e.message || e.error) + '</p>';
+    }
+
+    document.getElementById('refresh').addEventListener('click', loadAccounts);
+    loadAccounts();
+  </script>
+</body>
+</html>

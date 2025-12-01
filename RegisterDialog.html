@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; }
+    input { width: 100%; padding: 8px; margin: 6px 0 16px; border: 1px solid #ddd; border-radius: 4px; }
+    label { font-weight: bold; font-size: 13px; }
+    .btn { background: #1a73e8; color: #fff; padding: 10px 16px; border: none; border-radius: 4px; cursor: pointer; }
+    .btn.secondary { background: #5f6368; }
+    .btn:hover { opacity: 0.95; }
+    #status { margin-top: 10px; font-size: 13px; }
+    #result { margin-top: 12px; padding: 10px; border-radius: 6px; background: #f1f3f4; }
+    code { background: #e8eaed; padding: 2px 4px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h3>Register SnapTrade User</h3>
+  <p>Provide a unique user ID (recommended: UUID). Leave blank to auto-generate.</p>
+  <label for="userId">User ID</label>
+  <input type="text" id="userId" placeholder="e.g., 123e4567-e89b-12d3-a456-426614174000">
+  <button class="btn" id="register-btn">Register</button>
+  <button class="btn secondary" id="generate-btn">Generate ID</button>
+  <div id="status"></div>
+  <div id="result" style="display:none;"></div>
+
+  <script>
+    document.getElementById('generate-btn').addEventListener('click', function() {
+      google.script.run
+        .withSuccessHandler(function(id) {
+          document.getElementById('userId').value = id;
+        })
+        .generateUserId();
+    });
+
+    document.getElementById('register-btn').addEventListener('click', function() {
+      const userId = document.getElementById('userId').value.trim();
+      document.getElementById('status').textContent = 'Registering...';
+      google.script.run
+        .withSuccessHandler(function(result) {
+          document.getElementById('status').textContent = 'Registered successfully';
+          const card = document.getElementById('result');
+          card.style.display = 'block';
+          card.innerHTML = `
+            <div><strong>User ID:</strong> <code>${result.userId}</code></div>
+            <div><strong>User Secret:</strong> <code>${result.userSecret}</code></div>
+            <p style="color:#c5221f; font-size:12px; margin-top:8px;">Store the secret securely. SnapTrade only returns it once.</p>
+          `;
+        })
+        .withFailureHandler(function(err) {
+          document.getElementById('status').textContent = 'Error: ' + err.message;
+        })
+        .registerUserFromDialog(userId);
+    });
+  </script>
+</body>
+</html>

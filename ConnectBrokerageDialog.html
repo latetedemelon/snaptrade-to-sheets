@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    body { font-family: Arial, sans-serif; padding: 18px; }
+    .brokers { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; margin-top: 10px; }
+    .card { border: 1px solid #e0e0e0; border-radius: 8px; padding: 12px; box-shadow: 0 1px 2px rgba(0,0,0,0.08); }
+    .card h4 { margin: 0 0 6px; font-size: 14px; }
+    .card p { margin: 0; font-size: 12px; color: #5f6368; }
+    .btn { background: #1a73e8; color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; margin-top: 8px; }
+    .btn.secondary { background: #34a853; }
+    .btn:hover { opacity: 0.95; }
+    #status { margin-top: 12px; padding: 10px; border-radius: 6px; background: #f1f3f4; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <h3>Connect Your Brokerage</h3>
+  <p>Open the SnapTrade portal to authenticate with your brokerage, then return and check status.</p>
+  <button class="btn" id="open-generic">Open Connection Portal</button>
+  <button class="btn secondary" id="check-status">Check Connection Status</button>
+  <div id="status"></div>
+
+  <h4 style="margin-top:18px;">Popular Brokerages</h4>
+  <div id="brokers" class="brokers"></div>
+
+  <script>
+    const previousCount = <?= previousCount ?>;
+
+    document.getElementById('open-generic').addEventListener('click', function() {
+      launchPortal();
+    });
+
+    document.getElementById('check-status').addEventListener('click', function() {
+      document.getElementById('status').textContent = 'Checking for new connections...';
+      google.script.run
+        .withSuccessHandler(function(result) {
+          const message = result.newAccounts > 0
+            ? `Success! ${result.newAccounts} new account(s) connected.`
+            : 'No new accounts yet. Complete the portal flow and try again.';
+          document.getElementById('status').textContent = message;
+        })
+        .withFailureHandler(showError)
+        .checkForNewAccounts(previousCount);
+    });
+
+    function launchPortal(broker) {
+      document.getElementById('status').textContent = 'Generating portal link...';
+      google.script.run
+        .withSuccessHandler(function(url) {
+          document.getElementById('status').innerHTML = 'Portal opened in a new tab.';
+          window.open(url, '_blank');
+        })
+        .withFailureHandler(showError)
+        .getPortalUrl(broker);
+    }
+
+    function showError(err) {
+      document.getElementById('status').textContent = 'Error: ' + (err.message || err);
+    }
+
+    function renderBrokerCards(brokers) {
+      const container = document.getElementById('brokers');
+      container.innerHTML = '';
+      brokers.slice(0, 8).forEach(function(broker) {
+        const card = document.createElement('div');
+        card.className = 'card';
+        card.innerHTML = `
+          <h4>${broker.name}</h4>
+          <p>${broker.country || 'Available'}</p>
+          <button class="btn" data-broker="${broker.slug}">Connect</button>
+        `;
+        card.querySelector('button').addEventListener('click', function() {
+          launchPortal(broker.slug);
+        });
+        container.appendChild(card);
+      });
+    }
+
+    google.script.run
+      .withSuccessHandler(renderBrokerCards)
+      .withFailureHandler(showError)
+      .getBrokerageMetadata();
+  </script>
+</body>
+</html>
