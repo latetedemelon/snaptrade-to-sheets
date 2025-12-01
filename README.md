@@ -1,1 +1,729 @@
-# snaptrade-to-sheets
+# Complete guide to building a SnapTrade Google Sheets integration
+
+Building a Google Sheets Add-on that integrates with SnapTrade requires mastering HMAC-SHA256 signature authentication, implementing the brokerage connection portal flow, and leveraging Google Apps Script's `UrlFetchApp` for API calls. **This guide provides complete technical specifications** covering all authentication requirements, API endpoints, connection flows, and production-ready code examples to build a fully functional portfolio tracking solution.
+
+## SnapTrade authentication requires HMAC-SHA256 request signing
+
+Every SnapTrade API request must include a cryptographic signature generated using your `consumerKey`. The API uses a two-tier authentication system: **partner-level credentials** (`clientId` + `consumerKey`) authenticate your application, while **user-level credentials** (`userId` + `userSecret`) identify which end-user's data to access.
+
+### Required parameters for every authenticated request
+
+| Parameter | Location | Description |
+|-----------|----------|-------------|
+| `clientId` | Query string | Your public SnapTrade client ID |
+| `timestamp` | Query string | Unix timestamp (seconds since epoch) |
+| `userId` | Query string | User identifier (for user-specific endpoints) |
+| `userSecret` | Query string | User's secret key (for user-specific endpoints) |
+| `Signature` | Header | Base64-encoded HMAC-SHA256 signature |
+
+### Signature generation algorithm for Apps Script
+
+The signature authenticates that requests originated from your application. Here's the exact implementation for Google Apps Script:
+
+```javascript
+/**
+ * Generates HMAC-SHA256 signature for SnapTrade API requests
+ * @param {string} consumerKey - Your SnapTrade consumer key (secret)
+ * @param {Object|null} requestBody - Request body object, or null for GET requests
+ * @param {string} requestPath - API path (e.g., '/api/v1/holdings')
+ * @param {string} queryString - Sorted query string without leading '?'
+ * @returns {string} Base64-encoded signature
+ */
+function generateSnapTradeSignature(consumerKey, requestBody, requestPath, queryString) {
+  // Build the signed content object (SnapTrade's SignedContent schema)
+  const sigObject = {
+    content: requestBody,  // Must be null (not {}) for requests without body
+    path: requestPath,
+    query: queryString
+  };
+  
+  // Serialize with sorted keys for consistent signing
+  const sigContent = JSON.stringify(sigObject);
+  
+  // Generate HMAC-SHA256 signature
+  const signatureBytes = Utilities.computeHmacSha256Signature(sigContent, consumerKey);
+  
+  // Return base64-encoded result
+  return Utilities.base64Encode(signatureBytes);
+}
+```
+
+**Critical implementation details**: The `content` field must be `null` (not an empty object `{}`) when there's no request body. Query parameters must be sorted alphabetically. The `path` must include the full API prefix (e.g., `/api/v1/snapTrade/holdings`).
+
+## User registration creates the foundation for account connections
+
+Before accessing any brokerage data, you must register each end-user with SnapTrade. This one-time process generates a `userSecret` that acts as a per-user API key.
+
+```javascript
+/**
+ * Registers a new SnapTrade user and returns their credentials
+ * @param {string} userId - Your internal unique user identifier (use UUID, not email)
+ * @returns {Object} { userId, userSecret }
+ */
+function registerSnapTradeUser(userId) {
+  const props = PropertiesService.getScriptProperties();
+  const clientId = props.getProperty('SNAPTRADE_CLIENT_ID');
+  const consumerKey = props.getProperty('SNAPTRADE_CONSUMER_KEY');
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  
+  const requestPath = '/api/v1/snapTrade/registerUser';
+  const queryString = `clientId=${clientId}&timestamp=${timestamp}`;
+  const requestBody = { userId: userId };
+  
+  const signature = generateSnapTradeSignature(consumerKey, requestBody, requestPath, queryString);
+  
+  const options = {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify(requestBody),
+    headers: { 'Signature': signature },
+    muteHttpExceptions: true
+  };
+  
+  const response = UrlFetchApp.fetch(
+    `https://api.snaptrade.com${requestPath}?${queryString}`,
+    options
+  );
+  
+  if (response.getResponseCode() === 200) {
+    const result = JSON.parse(response.getContentText());
+    // Store userSecret securely - it's generated only ONCE
+    PropertiesService.getUserProperties().setProperty('SNAPTRADE_USER_SECRET', result.userSecret);
+    return result;
+  }
+  
+  throw new Error(`Registration failed: ${response.getContentText()}`);
+}
+```
+
+**Store the `userSecret` immediately and securely**—SnapTrade generates it only once during registration. If lost, you must create a new user and have the end-user reconnect their brokerages.
+
+## The Connection Portal handles brokerage OAuth flows
+
+SnapTrade provides a hosted Connection Portal that manages the entire brokerage authentication process, including OAuth redirects, credential entry, and multi-factor authentication. Your application generates a time-limited portal URL, opens it for the user, then receives a callback when connection completes.
+
+### Generating connection portal URLs
+
+```javascript
+/**
+ * Generates a SnapTrade Connection Portal URL for brokerage linking
+ * @param {string} userId - The registered SnapTrade user ID
+ * @param {string} userSecret - The user's secret key
+ * @param {Object} options - Optional: { broker, customRedirect, connectionType }
+ * @returns {string} Portal URL (expires in 5 minutes)
+ */
+function generateConnectionPortalUrl(userId, userSecret, options = {}) {
+  const props = PropertiesService.getScriptProperties();
+  const clientId = props.getProperty('SNAPTRADE_CLIENT_ID');
+  const consumerKey = props.getProperty('SNAPTRADE_CONSUMER_KEY');
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  
+  const requestPath = '/api/v1/snapTrade/login';
+  const queryParams = new URLSearchParams({
+    clientId: clientId,
+    timestamp: timestamp,
+    userId: userId,
+    userSecret: userSecret
+  });
+  
+  // Sort parameters alphabetically for signature
+  const sortedQuery = Array.from(queryParams.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([k, v]) => `${k}=${v}`)
+    .join('&');
+  
+  const requestBody = {};
+  if (options.broker) requestBody.broker = options.broker;
+  if (options.customRedirect) requestBody.customRedirect = options.customRedirect;
+  if (options.connectionType) requestBody.connectionType = options.connectionType;
+  
+  const bodyToSign = Object.keys(requestBody).length > 0 ? requestBody : null;
+  const signature = generateSnapTradeSignature(consumerKey, bodyToSign, requestPath, sortedQuery);
+  
+  const fetchOptions = {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { 'Signature': signature },
+    muteHttpExceptions: true
+  };
+  
+  if (bodyToSign) {
+    fetchOptions.payload = JSON.stringify(requestBody);
+  }
+  
+  const response = UrlFetchApp.fetch(
+    `https://api.snaptrade.com${requestPath}?${sortedQuery}`,
+    fetchOptions
+  );
+  
+  const result = JSON.parse(response.getContentText());
+  return result.redirectURI;  // Open this URL for user
+}
+```
+
+### Handling the connection flow in Google Sheets
+
+Since Apps Script cannot receive OAuth callbacks directly, use a **polling approach** with a modal dialog:
+
+```javascript
+/**
+ * Shows connection dialog and polls for new accounts
+ */
+function showConnectBrokerageDialog() {
+  const userId = PropertiesService.getUserProperties().getProperty('SNAPTRADE_USER_ID');
+  const userSecret = PropertiesService.getUserProperties().getProperty('SNAPTRADE_USER_SECRET');
+  
+  // Get current account count before connection
+  const existingAccounts = listUserAccounts(userId, userSecret);
+  const previousCount = existingAccounts.length;
+  
+  // Generate portal URL
+  const portalUrl = generateConnectionPortalUrl(userId, userSecret);
+  
+  const html = HtmlService.createHtmlOutput(`
+    <style>
+      body { font-family: Arial, sans-serif; padding: 20px; }
+      .btn { background: #1a73e8; color: white; padding: 12px 24px; border: none; 
+             border-radius: 4px; cursor: pointer; font-size: 14px; }
+      .btn:hover { background: #1557b0; }
+      #status { margin-top: 20px; padding: 10px; border-radius: 4px; }
+      .checking { background: #fff3cd; }
+      .success { background: #d4edda; color: #155724; }
+    </style>
+    <h3>Connect Your Brokerage</h3>
+    <p>Click below to securely connect your brokerage account:</p>
+    <a href="${portalUrl}" target="_blank" class="btn">Open Connection Portal</a>
+    <p style="margin-top: 15px; font-size: 12px; color: #666;">
+      Complete the connection in the new window, then click "Check Connection" below.
+    </p>
+    <button class="btn" onclick="checkConnection()" style="margin-top: 10px; background: #34a853;">
+      Check Connection Status
+    </button>
+    <div id="status"></div>
+    <script>
+      function checkConnection() {
+        document.getElementById('status').className = 'checking';
+        document.getElementById('status').innerHTML = 'Checking for new connections...';
+        google.script.run
+          .withSuccessHandler(function(result) {
+            if (result.newAccounts > 0) {
+              document.getElementById('status').className = 'success';
+              document.getElementById('status').innerHTML = 
+                'Success! ' + result.newAccounts + ' new account(s) connected.';
+            } else {
+              document.getElementById('status').innerHTML = 
+                'No new accounts detected. Complete the connection and try again.';
+            }
+          })
+          .withFailureHandler(function(error) {
+            document.getElementById('status').innerHTML = 'Error: ' + error.message;
+          })
+          .checkForNewAccounts(${previousCount});
+      }
+    </script>
+  `).setWidth(450).setHeight(350);
+  
+  SpreadsheetApp.getUi().showModalDialog(html, 'Connect Brokerage');
+}
+
+function checkForNewAccounts(previousCount) {
+  const userId = PropertiesService.getUserProperties().getProperty('SNAPTRADE_USER_ID');
+  const userSecret = PropertiesService.getUserProperties().getProperty('SNAPTRADE_USER_SECRET');
+  const accounts = listUserAccounts(userId, userSecret);
+  return { newAccounts: accounts.length - previousCount, totalAccounts: accounts.length };
+}
+```
+
+## Complete API endpoint reference for portfolio data
+
+The SnapTrade API provides endpoints for accounts, holdings, balances, transactions, and trading. All endpoints use base URL `https://api.snaptrade.com/api/v1/`.
+
+### Account and holdings endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/accounts` | GET | List all connected brokerage accounts |
+| `/accounts/{accountId}` | GET | Get specific account details |
+| `/accounts/{accountId}/holdings` | GET | Get positions, balances, and orders |
+| `/accounts/{accountId}/balances` | GET | Get cash and buying power |
+| `/accounts/{accountId}/positions` | GET | Get stock/ETF/crypto positions |
+| `/accounts/{accountId}/orders` | GET | Get order history (params: `state`, `days`) |
+| `/holdings` | GET | Get holdings across all accounts (deprecated) |
+
+### Transaction and activity endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/activities` | GET | Get transaction history with filters |
+| `/accounts/{accountId}/activities` | GET | Get account-specific transactions |
+
+**Activity filters**: `startDate`, `endDate`, `accounts` (comma-separated IDs), `type` (BUY, SELL, DIVIDEND, CONTRIBUTION, WITHDRAWAL, INTEREST, FEE, TRANSFER, SPLIT).
+
+### Trading endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/trade/impact` | POST | Preview order impact before placing |
+| `/trade/{tradeId}` | POST | Execute previously checked order |
+| `/accounts/{accountId}/orders` | POST | Place order directly |
+| `/accounts/{accountId}/orders/cancel` | POST | Cancel open order |
+| `/accounts/{accountId}/quotes` | GET | Get delayed quotes |
+
+## Core API functions for Google Apps Script
+
+### Generic authenticated request function
+
+```javascript
+/**
+ * Makes an authenticated request to SnapTrade API
+ * @param {string} method - HTTP method (GET, POST, DELETE)
+ * @param {string} path - API path starting with /api/v1/
+ * @param {Object} additionalParams - Additional query parameters
+ * @param {Object|null} body - Request body for POST/PUT
+ * @returns {Object} Parsed JSON response
+ */
+function snapTradeRequest(method, path, additionalParams = {}, body = null) {
+  const props = PropertiesService.getScriptProperties();
+  const userProps = PropertiesService.getUserProperties();
+  
+  const clientId = props.getProperty('SNAPTRADE_CLIENT_ID');
+  const consumerKey = props.getProperty('SNAPTRADE_CONSUMER_KEY');
+  const userId = userProps.getProperty('SNAPTRADE_USER_ID');
+  const userSecret = userProps.getProperty('SNAPTRADE_USER_SECRET');
+  
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  
+  // Build query parameters
+  const params = {
+    clientId: clientId,
+    timestamp: timestamp,
+    userId: userId,
+    userSecret: userSecret,
+    ...additionalParams
+  };
+  
+  // Sort alphabetically for signature
+  const sortedQuery = Object.keys(params)
+    .sort()
+    .map(k => `${encodeURIComponent(k)}=${encodeURIComponent(params[k])}`)
+    .join('&');
+  
+  const signature = generateSnapTradeSignature(consumerKey, body, path, sortedQuery);
+  
+  const options = {
+    method: method.toLowerCase(),
+    headers: { 'Signature': signature },
+    muteHttpExceptions: true
+  };
+  
+  if (body && (method === 'POST' || method === 'PUT')) {
+    options.contentType = 'application/json';
+    options.payload = JSON.stringify(body);
+  }
+  
+  const response = UrlFetchApp.fetch(
+    `https://api.snaptrade.com${path}?${sortedQuery}`,
+    options
+  );
+  
+  const code = response.getResponseCode();
+  const content = response.getContentText();
+  
+  if (code >= 200 && code < 300) {
+    return JSON.parse(content);
+  }
+  
+  // Handle rate limiting
+  if (code === 429) {
+    throw new Error('Rate limited. Please wait before making more requests.');
+  }
+  
+  throw new Error(`SnapTrade API Error (${code}): ${content}`);
+}
+```
+
+### Fetch all holdings and write to sheet
+
+```javascript
+/**
+ * Fetches holdings for all accounts and writes to active sheet
+ */
+function refreshHoldings() {
+  const accounts = snapTradeRequest('GET', '/api/v1/accounts');
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Holdings') 
+    || SpreadsheetApp.getActiveSpreadsheet().insertSheet('Holdings');
+  
+  // Clear and set headers
+  sheet.clear();
+  sheet.appendRow([
+    'Account', 'Symbol', 'Description', 'Quantity', 'Price', 
+    'Market Value', 'Cost Basis', 'Gain/Loss', 'Currency'
+  ]);
+  
+  const rows = [];
+  
+  accounts.forEach(account => {
+    const holdings = snapTradeRequest('GET', `/api/v1/accounts/${account.id}/holdings`);
+    
+    if (holdings.positions) {
+      holdings.positions.forEach(position => {
+        const symbol = position.symbol?.symbol || {};
+        const marketValue = (position.units || 0) * (position.price || 0);
+        const costBasis = (position.units || 0) * (position.average_purchase_price || 0);
+        
+        rows.push([
+          account.name || account.number,
+          symbol.symbol || 'N/A',
+          symbol.description || '',
+          position.units || 0,
+          position.price || 0,
+          marketValue,
+          costBasis,
+          marketValue - costBasis,
+          position.currency?.code || 'USD'
+        ]);
+      });
+    }
+  });
+  
+  if (rows.length > 0) {
+    sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
+  }
+  
+  // Format as currency
+  sheet.getRange(2, 5, Math.max(rows.length, 1), 4).setNumberFormat('$#,##0.00');
+  SpreadsheetApp.getUi().alert(`Refreshed ${rows.length} positions from ${accounts.length} accounts.`);
+}
+```
+
+### Fetch balances summary
+
+```javascript
+/**
+ * Creates a balances summary sheet
+ */
+function refreshBalances() {
+  const accounts = snapTradeRequest('GET', '/api/v1/accounts');
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Balances')
+    || SpreadsheetApp.getActiveSpreadsheet().insertSheet('Balances');
+  
+  sheet.clear();
+  sheet.appendRow(['Account', 'Institution', 'Cash', 'Buying Power', 'Total Value', 'Currency']);
+  
+  const rows = [];
+  
+  accounts.forEach(account => {
+    const balances = snapTradeRequest('GET', `/api/v1/accounts/${account.id}/balances`);
+    
+    balances.forEach(bal => {
+      rows.push([
+        account.name || account.number,
+        account.institution_name || '',
+        bal.cash || 0,
+        bal.buying_power || 0,
+        account.balance?.total?.amount || 0,
+        bal.currency?.code || 'USD'
+      ]);
+    });
+  });
+  
+  if (rows.length > 0) {
+    sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
+    sheet.getRange(2, 3, rows.length, 3).setNumberFormat('$#,##0.00');
+  }
+}
+```
+
+### Fetch transaction history
+
+```javascript
+/**
+ * Fetches transactions for a date range
+ * @param {string} startDate - ISO date string (YYYY-MM-DD)
+ * @param {string} endDate - ISO date string (YYYY-MM-DD)
+ */
+function refreshTransactions(startDate, endDate) {
+  const params = {};
+  if (startDate) params.startDate = startDate;
+  if (endDate) params.endDate = endDate;
+  
+  const transactions = snapTradeRequest('GET', '/api/v1/activities', params);
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Transactions')
+    || SpreadsheetApp.getActiveSpreadsheet().insertSheet('Transactions');
+  
+  sheet.clear();
+  sheet.appendRow([
+    'Date', 'Account', 'Type', 'Symbol', 'Description', 
+    'Quantity', 'Price', 'Amount', 'Fee', 'Currency'
+  ]);
+  
+  const rows = transactions.map(tx => [
+    tx.trade_date || tx.settlement_date,
+    tx.account?.name || tx.account?.number || '',
+    tx.type,
+    tx.symbol?.symbol || '',
+    tx.description || '',
+    tx.units || '',
+    tx.price || '',
+    tx.amount || 0,
+    tx.fee || 0,
+    tx.currency?.code || 'USD'
+  ]);
+  
+  if (rows.length > 0) {
+    sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
+    sheet.getRange(2, 8, rows.length, 2).setNumberFormat('$#,##0.00');
+  }
+}
+```
+
+## Building the Add-on interface with menus and sidebars
+
+### Add-on menu setup
+
+```javascript
+/**
+ * Creates custom menu when spreadsheet opens
+ */
+function onOpen(e) {
+  SpreadsheetApp.getUi()
+    .createMenu('📊 SnapTrade')
+    .addItem('🔗 Connect Brokerage', 'showConnectBrokerageDialog')
+    .addItem('📋 View Connected Accounts', 'showAccountsSidebar')
+    .addSeparator()
+    .addItem('💰 Refresh Holdings', 'refreshHoldings')
+    .addItem('💵 Refresh Balances', 'refreshBalances')
+    .addItem('📜 Refresh Transactions', 'showTransactionDialog')
+    .addSeparator()
+    .addSubMenu(SpreadsheetApp.getUi().createMenu('⚙️ Settings')
+      .addItem('Configure API Keys', 'showApiKeyDialog')
+      .addItem('Register User', 'showRegisterDialog')
+      .addItem('Clear All Data', 'clearAllData'))
+    .addToUi();
+}
+
+function onInstall(e) {
+  onOpen(e);
+}
+```
+
+### API key configuration dialog
+
+```javascript
+/**
+ * Shows dialog for entering SnapTrade API credentials
+ */
+function showApiKeyDialog() {
+  const html = HtmlService.createHtmlOutput(`
+    <style>
+      body { font-family: Arial, sans-serif; padding: 20px; }
+      input { width: 100%; padding: 8px; margin: 5px 0 15px 0; border: 1px solid #ddd; border-radius: 4px; }
+      label { font-weight: bold; font-size: 13px; }
+      .btn { background: #1a73e8; color: white; padding: 10px 20px; border: none; 
+             border-radius: 4px; cursor: pointer; width: 100%; }
+      .warning { background: #fff3cd; padding: 10px; border-radius: 4px; margin-bottom: 15px; font-size: 12px; }
+    </style>
+    <div class="warning">
+      ⚠️ Your Consumer Key is sensitive. It will be stored in Script Properties 
+      accessible only to spreadsheet editors.
+    </div>
+    <label>Client ID</label>
+    <input type="text" id="clientId" placeholder="Your SnapTrade Client ID" />
+    <label>Consumer Key (Secret)</label>
+    <input type="password" id="consumerKey" placeholder="Your SnapTrade Consumer Key" />
+    <button class="btn" onclick="save()">Save Credentials</button>
+    <script>
+      function save() {
+        google.script.run
+          .withSuccessHandler(function() { 
+            alert('Credentials saved successfully!');
+            google.script.host.close();
+          })
+          .withFailureHandler(function(e) { alert('Error: ' + e.message); })
+          .saveApiCredentials(
+            document.getElementById('clientId').value,
+            document.getElementById('consumerKey').value
+          );
+      }
+    </script>
+  `).setWidth(400).setHeight(320);
+  
+  SpreadsheetApp.getUi().showModalDialog(html, 'Configure SnapTrade API');
+}
+
+function saveApiCredentials(clientId, consumerKey) {
+  if (!clientId || !consumerKey) throw new Error('Both fields are required');
+  const props = PropertiesService.getScriptProperties();
+  props.setProperty('SNAPTRADE_CLIENT_ID', clientId);
+  props.setProperty('SNAPTRADE_CONSUMER_KEY', consumerKey);
+}
+```
+
+### Accounts sidebar
+
+```javascript
+/**
+ * Shows sidebar with connected accounts overview
+ */
+function showAccountsSidebar() {
+  const html = HtmlService.createHtmlOutputFromFile('AccountsSidebar')
+    .setTitle('Connected Accounts');
+  SpreadsheetApp.getUi().showSidebar(html);
+}
+
+/**
+ * Returns account data for sidebar display
+ */
+function getAccountsForSidebar() {
+  try {
+    const accounts = snapTradeRequest('GET', '/api/v1/accounts');
+    return accounts.map(acc => ({
+      id: acc.id,
+      name: acc.name || acc.number,
+      institution: acc.institution_name,
+      balance: acc.balance?.total?.amount || 0,
+      currency: acc.balance?.total?.currency || 'USD',
+      status: acc.sync_status?.holdings?.initial_sync_completed ? 'Synced' : 'Syncing...',
+      lastSync: acc.sync_status?.holdings?.last_successful_sync
+    }));
+  } catch (e) {
+    return { error: e.message };
+  }
+}
+```
+
+**AccountsSidebar.html**:
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <link rel="stylesheet" href="https://ssl.gstatic.com/docs/script/css/add-ons1.css">
+  <style>
+    .account-card { border: 1px solid #e0e0e0; border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+    .account-name { font-weight: bold; font-size: 14px; }
+    .institution { color: #666; font-size: 12px; }
+    .balance { font-size: 18px; color: #1a73e8; margin: 8px 0; }
+    .status { font-size: 11px; color: #34a853; }
+    .loading { text-align: center; padding: 40px; }
+  </style>
+</head>
+<body>
+  <div class="sidebar">
+    <div id="content"><div class="loading">Loading accounts...</div></div>
+    <button class="blue" onclick="refresh()" style="width: 100%; margin-top: 10px;">Refresh</button>
+  </div>
+  <script>
+    function loadAccounts() {
+      google.script.run
+        .withSuccessHandler(renderAccounts)
+        .withFailureHandler(showError)
+        .getAccountsForSidebar();
+    }
+    
+    function renderAccounts(accounts) {
+      if (accounts.error) { showError(accounts); return; }
+      let html = accounts.length === 0 ? '<p>No accounts connected yet.</p>' : '';
+      accounts.forEach(acc => {
+        html += `
+          <div class="account-card">
+            <div class="account-name">${acc.name}</div>
+            <div class="institution">${acc.institution}</div>
+            <div class="balance">$${acc.balance.toLocaleString()}</div>
+            <div class="status">✓ ${acc.status}</div>
+          </div>`;
+      });
+      document.getElementById('content').innerHTML = html;
+    }
+    
+    function showError(e) {
+      document.getElementById('content').innerHTML = '<p style="color:red;">Error: ' + (e.message || e.error) + '</p>';
+    }
+    
+    function refresh() { loadAccounts(); }
+    loadAccounts();
+  </script>
+</body>
+</html>
+```
+
+## Supported brokerages span North America, Europe, and beyond
+
+SnapTrade connects to **20+ major brokerages** including Alpaca, Robinhood, Schwab, Fidelity, E*TRADE, Interactive Brokers, TradeStation, Questrade, Wealthsimple, Trading 212, Coinbase, Kraken, and Public. Some brokerages (Alpaca, Fidelity, Questrade, TradeStation, Tradier) require application approval and are excluded from free API keys.
+
+The complete, current list is maintained at **snaptrade.com/brokerage-integrations**. Each brokerage supports different capabilities—check `allows_trading` in the `/brokerages` endpoint response to determine if trading is supported.
+
+## Rate limits and error handling patterns
+
+SnapTrade enforces a **250 requests per minute** default rate limit. Rate limit status is returned in headers:
+
+```
+X-RateLimit-Limit: 250
+X-RateLimit-Remaining: 245
+X-RateLimit-Reset: 45
+```
+
+### Robust error handling with retry logic
+
+```javascript
+/**
+ * Makes SnapTrade request with exponential backoff retry
+ */
+function snapTradeRequestWithRetry(method, path, params = {}, body = null, maxRetries = 3) {
+  let delay = 1000;
+  
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      return snapTradeRequest(method, path, params, body);
+    } catch (error) {
+      const isRateLimited = error.message.includes('429') || error.message.includes('Rate limited');
+      const isServerError = error.message.includes('500') || error.message.includes('502');
+      
+      if ((isRateLimited || isServerError) && attempt < maxRetries - 1) {
+        Logger.log(`Attempt ${attempt + 1} failed. Retrying in ${delay}ms...`);
+        Utilities.sleep(delay);
+        delay *= 2;  // Exponential backoff
+      } else {
+        throw error;
+      }
+    }
+  }
+}
+```
+
+## Secure credential storage strategy
+
+Use Google Apps Script's `PropertiesService` to store credentials with appropriate scope:
+
+| Credential | Storage | Rationale |
+|------------|---------|-----------|
+| `clientId` | Script Properties | Shared across all users of this add-on |
+| `consumerKey` | Script Properties | Shared secret (visible to editors only) |
+| `userId` | User Properties | Per-user, isolated storage |
+| `userSecret` | User Properties | Per-user secret, isolated storage |
+
+```javascript
+// Initial setup (run once by developer)
+function initializeScriptProperties() {
+  PropertiesService.getScriptProperties().setProperties({
+    'SNAPTRADE_CLIENT_ID': 'your-client-id',
+    'SNAPTRADE_CONSUMER_KEY': 'your-consumer-key'
+  });
+}
+
+// Per-user setup (each user runs this)
+function saveUserCredentials(userId, userSecret) {
+  PropertiesService.getUserProperties().setProperties({
+    'SNAPTRADE_USER_ID': userId,
+    'SNAPTRADE_USER_SECRET': userSecret
+  });
+}
+```
+
+## Conclusion
+
+Building a SnapTrade Google Sheets integration requires implementing HMAC-SHA256 signature authentication using `Utilities.computeHmacSha256Signature()`, handling the Connection Portal flow through modal dialogs with polling, and leveraging `PropertiesService` for secure credential storage. **The signature generation is the most critical component**—ensure query parameters are sorted alphabetically and the `content` field is `null` (not `{}`) for GET requests.
+
+Key architectural decisions: use User Properties for per-user secrets to maintain isolation; implement exponential backoff for rate limit handling; and consider time-driven triggers for automatic portfolio refreshes. The Connection Portal eliminates OAuth complexity by handling all brokerage authentication flows, requiring only URL generation and post-connection account polling from your integration.
+
+For production deployment, add the OAuth2 library (ID: `1B7FSrk5Zi6L1rSxxTDgDEUsPzlukDsi4KGuTMorsTQHhGBzBkMun4iDF`) if you need additional Google API scopes, implement comprehensive logging with `Logger.log()`, and test thoroughly with SnapTrade's `/snapTrade/mockSignature` endpoint to validate your signature implementation before going live.
