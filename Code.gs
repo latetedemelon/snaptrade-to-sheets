@@ -237,13 +237,18 @@ function listUserAccounts() {
  * @returns {Array<{name: string, institution: string, balance: number, status: string}>}
  */
 function getAccountsForSidebar() {
-  const accounts = listUserAccounts();
-  return accounts.map((account) => ({
-    name: account.name || account.number,
-    institution: account.institution_name || 'Unknown',
-    balance: (account.balance && account.balance.total && account.balance.total.amount) || 0,
-    status: account.sync_status || 'Connected',
-  }));
+  try {
+    const accounts = listUserAccounts();
+    return accounts.map((account) => ({
+      name: account.name || account.number,
+      institution: account.institution_name || 'Unknown',
+      balance: (account.balance && account.balance.total && account.balance.total.amount) || 0,
+      status: account.sync_status || 'Connected',
+    }));
+  } catch (error) {
+    Logger.log(`getAccountsForSidebar error: ${error.message}`);
+    return { error: error.message };
+  }
 }
 
 /**
@@ -289,91 +294,103 @@ function clearAllData() {
  * Fetches holdings for all accounts and writes to sheet.
  */
 function refreshHoldings() {
-  const accounts = snapTradeRequest('GET', '/api/v1/accounts', {}, null);
-  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = spreadsheet.getSheetByName('Holdings') || spreadsheet.insertSheet('Holdings');
+  try {
+    const accounts = snapTradeRequest('GET', '/api/v1/accounts', {}, null);
+    const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = spreadsheet.getSheetByName('Holdings') || spreadsheet.insertSheet('Holdings');
 
-  sheet.clear();
-  sheet.appendRow([
-    'Account',
-    'Symbol',
-    'Description',
-    'Quantity',
-    'Price',
-    'Market Value',
-    'Cost Basis',
-    'Gain/Loss',
-    'Currency',
-  ]);
+    sheet.clear();
+    sheet.appendRow([
+      'Account',
+      'Symbol',
+      'Description',
+      'Quantity',
+      'Price',
+      'Market Value',
+      'Cost Basis',
+      'Gain/Loss',
+      'Currency',
+    ]);
 
-  const rows = [];
+    const rows = [];
 
-  accounts.forEach((account) => {
-    const holdings = snapTradeRequest('GET', `/api/v1/accounts/${account.id}/holdings`, {}, null);
+    accounts.forEach((account) => {
+      const holdings = snapTradeRequest('GET', `/api/v1/accounts/${account.id}/holdings`, {}, null);
 
-    if (holdings.positions) {
-      holdings.positions.forEach((position) => {
-        const symbol = (position.symbol && position.symbol.symbol) || 'N/A';
-        const description = (position.symbol && position.symbol.description) || '';
-        const units = position.units || 0;
-        const price = position.price || 0;
-        const marketValue = units * price;
-        const costBasis = units * (position.average_purchase_price || 0);
+      if (holdings.positions) {
+        holdings.positions.forEach((position) => {
+          const symbol = (position.symbol && position.symbol.symbol) || 'N/A';
+          const description = (position.symbol && position.symbol.description) || '';
+          const units = position.units || 0;
+          const price = position.price || 0;
+          const marketValue = units * price;
+          const costBasis = units * (position.average_purchase_price || 0);
 
-        rows.push([
-          account.name || account.number,
-          symbol,
-          description,
-          units,
-          price,
-          marketValue,
-          costBasis,
-          marketValue - costBasis,
-          (position.currency && position.currency.code) || 'USD',
-        ]);
-      });
+          rows.push([
+            account.name || account.number,
+            symbol,
+            description,
+            units,
+            price,
+            marketValue,
+            costBasis,
+            marketValue - costBasis,
+            (position.currency && position.currency.code) || 'USD',
+          ]);
+        });
+      }
+    });
+
+    if (rows.length > 0) {
+      sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
     }
-  });
 
-  if (rows.length > 0) {
-    sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
+    sheet.getRange(2, 5, Math.max(rows.length, 1), 4).setNumberFormat('$#,##0.00');
+    SpreadsheetApp.getUi().alert(`Refreshed ${rows.length} positions from ${accounts.length} accounts.`);
+  } catch (error) {
+    SpreadsheetApp.getUi().alert(`Error refreshing holdings: ${error.message}`);
+    Logger.log(`refreshHoldings error: ${error.message}`);
   }
-
-  sheet.getRange(2, 5, Math.max(rows.length, 1), 4).setNumberFormat('$#,##0.00');
-  SpreadsheetApp.getUi().alert(`Refreshed ${rows.length} positions from ${accounts.length} accounts.`);
 }
 
 /**
  * Creates a balances summary sheet.
  */
 function refreshBalances() {
-  const accounts = snapTradeRequest('GET', '/api/v1/accounts', {}, null);
-  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = spreadsheet.getSheetByName('Balances') || spreadsheet.insertSheet('Balances');
+  try {
+    const accounts = snapTradeRequest('GET', '/api/v1/accounts', {}, null);
+    const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = spreadsheet.getSheetByName('Balances') || spreadsheet.insertSheet('Balances');
 
-  sheet.clear();
-  sheet.appendRow(['Account', 'Institution', 'Cash', 'Buying Power', 'Total Value', 'Currency']);
+    sheet.clear();
+    sheet.appendRow(['Account', 'Institution', 'Cash', 'Buying Power', 'Total Value', 'Currency']);
 
-  const rows = [];
+    const rows = [];
 
-  accounts.forEach((account) => {
-    const balances = snapTradeRequest('GET', `/api/v1/accounts/${account.id}/balances`, {}, null);
+    accounts.forEach((account) => {
+      const balances = snapTradeRequest('GET', `/api/v1/accounts/${account.id}/balances`, {}, null);
 
-    balances.forEach((bal) => {
-      rows.push([
-        account.name || account.number,
-        account.institution_name || '',
-        bal.cash || 0,
-        bal.buying_power || 0,
-        (account.balance && account.balance.total && account.balance.total.amount) || 0,
-        (bal.currency && bal.currency.code) || 'USD',
-      ]);
+      balances.forEach((bal) => {
+        rows.push([
+          account.name || account.number,
+          account.institution_name || '',
+          bal.cash || 0,
+          bal.buying_power || 0,
+          (account.balance && account.balance.total && account.balance.total.amount) || 0,
+          (bal.currency && bal.currency.code) || 'USD',
+        ]);
+      });
     });
-  });
 
-  if (rows.length > 0) {
-    sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
-    sheet.getRange(2, 3, rows.length, 3).setNumberFormat('$#,##0.00');
+    if (rows.length > 0) {
+      sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
+      sheet.getRange(2, 3, rows.length, 3).setNumberFormat('$#,##0.00');
+    }
+    
+    SpreadsheetApp.getUi().alert(`Refreshed balances for ${accounts.length} accounts.`);
+  } catch (error) {
+    SpreadsheetApp.getUi().alert(`Error refreshing balances: ${error.message}`);
+    Logger.log(`refreshBalances error: ${error.message}`);
   }
 }
 
@@ -383,44 +400,51 @@ function refreshBalances() {
  * @param {string} endDate - ISO date string (YYYY-MM-DD)
  */
 function refreshTransactions(startDate, endDate) {
-  const params = {};
-  if (startDate) params.startDate = startDate;
-  if (endDate) params.endDate = endDate;
+  try {
+    const params = {};
+    if (startDate) params.startDate = startDate;
+    if (endDate) params.endDate = endDate;
 
-  const transactions = snapTradeRequest('GET', '/api/v1/activities', params, null);
-  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = spreadsheet.getSheetByName('Transactions') || spreadsheet.insertSheet('Transactions');
+    const transactions = snapTradeRequest('GET', '/api/v1/activities', params, null);
+    const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = spreadsheet.getSheetByName('Transactions') || spreadsheet.insertSheet('Transactions');
 
-  sheet.clear();
-  sheet.appendRow([
-    'Date',
-    'Account',
-    'Type',
-    'Symbol',
-    'Description',
-    'Quantity',
-    'Price',
-    'Amount',
-    'Fee',
-    'Currency',
-  ]);
+    sheet.clear();
+    sheet.appendRow([
+      'Date',
+      'Account',
+      'Type',
+      'Symbol',
+      'Description',
+      'Quantity',
+      'Price',
+      'Amount',
+      'Fee',
+      'Currency',
+    ]);
 
-  const rows = transactions.map((tx) => [
-    tx.trade_date || tx.settlement_date,
-    (tx.account && (tx.account.name || tx.account.number)) || '',
-    tx.type,
-    (tx.symbol && tx.symbol.symbol) || '',
-    tx.description || '',
-    tx.units || '',
-    tx.price || '',
-    tx.amount || 0,
-    tx.fee || 0,
-    (tx.currency && tx.currency.code) || 'USD',
-  ]);
+    const rows = transactions.map((tx) => [
+      tx.trade_date || tx.settlement_date,
+      (tx.account && (tx.account.name || tx.account.number)) || '',
+      tx.type,
+      (tx.symbol && tx.symbol.symbol) || '',
+      tx.description || '',
+      tx.units || '',
+      tx.price || '',
+      tx.amount || 0,
+      tx.fee || 0,
+      (tx.currency && tx.currency.code) || 'USD',
+    ]);
 
-  if (rows.length > 0) {
-    sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
-    sheet.getRange(2, 8, rows.length, 2).setNumberFormat('$#,##0.00');
+    if (rows.length > 0) {
+      sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
+      sheet.getRange(2, 8, rows.length, 2).setNumberFormat('$#,##0.00');
+    }
+    
+    SpreadsheetApp.getUi().alert(`Refreshed ${rows.length} transactions.`);
+  } catch (error) {
+    SpreadsheetApp.getUi().alert(`Error refreshing transactions: ${error.message}`);
+    Logger.log(`refreshTransactions error: ${error.message}`);
   }
 }
 
