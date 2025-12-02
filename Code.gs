@@ -299,9 +299,12 @@ function parseJavaObjectString(javaObjStr, key) {
     return null;
   }
   
+  // Escape special regex characters in the key to prevent regex injection
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  
   // Match pattern: key=value where value can contain spaces, commas in nested objects, etc.
   // We need to handle nested objects like {figi_instrument={...}, symbol=VCN.TO, ...}
-  const regex = new RegExp(key + '=([^,{}]+|\\{[^}]+\\})', 'g');
+  const regex = new RegExp(escapedKey + '=([^,{}]+|\\{[^}]+\\})', 'g');
   const match = regex.exec(javaObjStr);
   
   if (match && match[1]) {
