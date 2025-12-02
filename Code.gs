@@ -288,6 +288,61 @@ function clearAllData() {
 }
 
 /**
+ * Parses Java object format string and extracts key-value pairs.
+ * Handles format: {key=value, key2=value2, ...}
+ * @param {string} javaObjStr - String representation of Java object
+ * @param {string} key - Key to extract from the object
+ * @returns {string|null} Extracted value or null if not found
+ */
+function parseJavaObjectString(javaObjStr, key) {
+  if (!javaObjStr || typeof javaObjStr !== 'string') {
+    return null;
+  }
+  
+  // Match pattern: key=value where value can contain spaces, commas in nested objects, etc.
+  // We need to handle nested objects like {figi_instrument={...}, symbol=VCN.TO, ...}
+  const regex = new RegExp(key + '=([^,{}]+|\\{[^}]+\\})', 'g');
+  const match = regex.exec(javaObjStr);
+  
+  if (match && match[1]) {
+    let value = match[1].trim();
+    // Remove trailing } if present
+    value = value.replace(/\}$/, '').trim();
+    return value;
+  }
+  
+  return null;
+}
+
+/**
+ * Extracts symbol and description from position.symbol data.
+ * Handles both object format and Java object string format.
+ * @param {Object|string} symbolData - Symbol data from API
+ * @returns {{symbol: string, description: string}}
+ */
+function extractSymbolInfo(symbolData) {
+  let symbol = 'N/A';
+  let description = '';
+  
+  if (!symbolData) {
+    return { symbol, description };
+  }
+  
+  // Check if it's a string (Java object format)
+  if (typeof symbolData === 'string') {
+    symbol = parseJavaObjectString(symbolData, 'symbol') || 'N/A';
+    description = parseJavaObjectString(symbolData, 'description') || '';
+  } 
+  // Check if it's an object
+  else if (typeof symbolData === 'object') {
+    symbol = symbolData.symbol || 'N/A';
+    description = symbolData.description || '';
+  }
+  
+  return { symbol, description };
+}
+
+/**
  * Fetches holdings for all accounts and writes to sheet.
  */
 function refreshHoldings() {
@@ -316,8 +371,9 @@ function refreshHoldings() {
 
       if (holdings.positions) {
         holdings.positions.forEach((position) => {
-          const symbol = (position.symbol && position.symbol.symbol) || 'N/A';
-          const description = (position.symbol && position.symbol.description) || '';
+          const symbolInfo = extractSymbolInfo(position.symbol);
+          const symbol = symbolInfo.symbol;
+          const description = symbolInfo.description;
           const units = position.units || 0;
           const price = position.price || 0;
           const marketValue = units * price;
