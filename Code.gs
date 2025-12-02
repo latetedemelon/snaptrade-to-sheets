@@ -180,17 +180,14 @@ function generateConnectionPortalUrl(options) {
   const timestamp = Math.floor(Date.now() / 1000).toString();
   const requestPath = '/api/v1/snapTrade/login';
 
-  const params = new URLSearchParams({
+  const params = {
     clientId: context.clientId,
     timestamp: timestamp,
     userId: context.userId,
     userSecret: context.userSecret,
-  });
+  };
 
-  const sortedQuery = Array.from(params.entries())
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([k, v]) => `${k}=${v}`)
-    .join('&');
+  const sortedQuery = buildSortedQuery(params);
 
   const requestBody = {};
   if (options && options.broker) requestBody.broker = options.broker;
