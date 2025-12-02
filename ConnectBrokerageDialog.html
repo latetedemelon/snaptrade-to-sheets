@@ -35,10 +35,15 @@
       document.getElementById('status').textContent = 'Checking for new connections...';
       google.script.run
         .withSuccessHandler(function(result) {
-          const message = result.newAccounts > 0
-            ? `Success! ${result.newAccounts} new account(s) connected.`
-            : 'No new accounts yet. Complete the portal flow and try again.';
-          document.getElementById('status').textContent = message;
+          if (result.newAccounts > 0) {
+            document.getElementById('status').textContent = `Success! ${result.newAccounts} new account(s) connected.`;
+            // Close the dialog and return to the Google Sheet
+            setTimeout(function() {
+              google.script.host.close();
+            }, 1000);
+          } else {
+            document.getElementById('status').textContent = 'No new accounts yet. Complete the portal flow and try again.';
+          }
         })
         .withFailureHandler(showError)
         .checkForNewAccounts(previousCount);
