@@ -290,6 +290,8 @@ function clearAllData() {
 /**
  * Parses Java object format string and extracts key-value pairs.
  * Handles format: {key=value, key2=value2, ...}
+ * Supports nested braces and brackets: {key={nested=val}, key2=[arr]}
+ * Also handles unclosed brackets in Java array representations like [Ljava.lang.Object;@hash
  * @param {string} javaObjStr - String representation of Java object
  * @param {string} key - Key to extract from the object
  * @returns {string|null} Extracted value or null if not found
@@ -299,19 +301,85 @@ function parseJavaObjectString(javaObjStr, key) {
     return null;
   }
   
-  // Escape special regex characters in the key to prevent regex injection
-  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // Remove outer braces if present
+  let content = javaObjStr.trim();
+  if (content.startsWith('{') && content.endsWith('}')) {
+    content = content.substring(1, content.length - 1);
+  }
   
-  // Match pattern: key=value where value can contain spaces, commas in nested objects, etc.
-  // We need to handle nested objects like {figi_instrument={...}, symbol=VCN.TO, ...}
-  const regex = new RegExp(escapedKey + '=([^,{}]+|\\{[^}]+\\})', 'g');
-  const match = regex.exec(javaObjStr);
+  // Parse using character-by-character approach to track depth
+  const pairs = [];
+  let currentKey = '';
+  let currentValue = '';
+  let inKey = true;
+  let braceDepth = 0;
+  let bracketDepth = 0;
   
-  if (match && match[1]) {
-    let value = match[1].trim();
-    // Remove trailing } if present
-    value = value.replace(/\}$/, '').trim();
-    return value;
+  for (let i = 0; i < content.length; i++) {
+    const char = content[i];
+    
+    if (char === '{') {
+      braceDepth++;
+      if (!inKey) currentValue += char;
+    } else if (char === '}') {
+      braceDepth--;
+      if (!inKey) currentValue += char;
+    } else if (char === '[') {
+      bracketDepth++;
+      if (!inKey) currentValue += char;
+    } else if (char === ']') {
+      bracketDepth--;
+      if (!inKey) currentValue += char;
+    } else if (char === '=' && braceDepth === 0 && bracketDepth === 0 && inKey) {
+      // Found the key-value separator
+      inKey = false;
+    } else if (char === ',' && braceDepth === 0 && bracketDepth === 0) {
+      // Found end of key-value pair
+      pairs.push({ key: currentKey.trim(), value: currentValue.trim() });
+      currentKey = '';
+      currentValue = '';
+      inKey = true;
+    } else if (char === ' ' && bracketDepth > 0 && !inKey) {
+      // Special handling for unclosed brackets in Java array representations
+      // Check if we have a pattern like ", key=" which indicates a new field
+      let lookahead = i + 1;
+      let possibleKey = '';
+      while (lookahead < content.length && content[lookahead] !== '=' && content[lookahead] !== ',' && content[lookahead] !== '{' && content[lookahead] !== '}') {
+        possibleKey += content[lookahead];
+        lookahead++;
+      }
+      if (lookahead < content.length && content[lookahead] === '=') {
+        // This is a new key-value pair, reset bracket depth
+        bracketDepth = 0;
+        // Save current pair
+        pairs.push({ key: currentKey.trim(), value: currentValue.trim() });
+        currentKey = '';
+        currentValue = '';
+        inKey = true;
+        // Don't add the space to anything, continue to next iteration
+        continue;
+      } else {
+        if (!inKey) currentValue += char;
+      }
+    } else {
+      if (inKey) {
+        currentKey += char;
+      } else {
+        currentValue += char;
+      }
+    }
+  }
+  
+  // Don't forget the last pair
+  if (currentKey.trim() !== '') {
+    pairs.push({ key: currentKey.trim(), value: currentValue.trim() });
+  }
+  
+  // Find the requested key
+  for (let i = 0; i < pairs.length; i++) {
+    if (pairs[i].key === key) {
+      return pairs[i].value;
+    }
   }
   
   return null;
@@ -331,8 +399,21 @@ function extractSymbolInfo(symbolData) {
     return { symbol, description };
   }
   
-  // Check if it's a string (Java object format)
+  // Check if it's a string (Java object format or JSON)
   if (typeof symbolData === 'string') {
+    // Try JSON parsing first
+    try {
+      const parsed = JSON.parse(symbolData);
+      if (parsed && typeof parsed === 'object') {
+        symbol = parsed.symbol || 'N/A';
+        description = parsed.description || '';
+        return { symbol, description };
+      }
+    } catch (e) {
+      // Not JSON, continue with Java object parsing
+    }
+    
+    // Parse as Java object string
     symbol = parseJavaObjectString(symbolData, 'symbol') || 'N/A';
     description = parseJavaObjectString(symbolData, 'description') || '';
   } 
