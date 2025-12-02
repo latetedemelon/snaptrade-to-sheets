@@ -288,6 +288,38 @@ function clearAllData() {
 }
 
 /**
+ * Enables or disables debug mode for verbose logging.
+ * @param {boolean} enabled - True to enable debug mode, false to disable
+ */
+function setDebugMode(enabled) {
+  const userProps = PropertiesService.getUserProperties();
+  if (enabled) {
+    userProps.setProperty('DEBUG_MODE', 'true');
+    SpreadsheetApp.getUi().alert('Debug mode enabled. Verbose logging will appear in execution logs.');
+  } else {
+    userProps.deleteProperty('DEBUG_MODE');
+    SpreadsheetApp.getUi().alert('Debug mode disabled.');
+  }
+}
+
+/**
+ * Checks if debug mode is currently enabled.
+ * @returns {boolean} True if debug mode is enabled
+ */
+function isDebugMode() {
+  const userProps = PropertiesService.getUserProperties();
+  return userProps.getProperty('DEBUG_MODE') === 'true';
+}
+
+/**
+ * Toggles debug mode on/off.
+ */
+function toggleDebugMode() {
+  const currentMode = isDebugMode();
+  setDebugMode(!currentMode);
+}
+
+/**
  * Parses Java object format string and extracts key-value pairs.
  * Handles format: {key=value, key2=value2, ...}
  * Supports nested braces and brackets: {key={nested=val}, key2=[arr]}
@@ -297,7 +329,15 @@ function clearAllData() {
  * @returns {string|null} Extracted value or null if not found
  */
 function parseJavaObjectString(javaObjStr, key) {
+  const debug = isDebugMode();
+  
+  if (debug) {
+    Logger.log(`[parseJavaObjectString] Input type: ${typeof javaObjStr}, Key: ${key}`);
+    Logger.log(`[parseJavaObjectString] Input value: ${javaObjStr}`);
+  }
+  
   if (!javaObjStr || typeof javaObjStr !== 'string') {
+    if (debug) Logger.log(`[parseJavaObjectString] Invalid input, returning null`);
     return null;
   }
   
@@ -305,6 +345,7 @@ function parseJavaObjectString(javaObjStr, key) {
   let content = javaObjStr.trim();
   if (content.startsWith('{') && content.endsWith('}')) {
     content = content.substring(1, content.length - 1);
+    if (debug) Logger.log(`[parseJavaObjectString] Stripped outer braces`);
   }
   
   // Parse using character-by-character approach to track depth
@@ -380,9 +421,22 @@ function parseJavaObjectString(javaObjStr, key) {
     pairs.push({ key: currentKey.trim(), value: currentValue.trim() });
   }
   
+  if (debug) {
+    Logger.log(`[parseJavaObjectString] Extracted ${pairs.length} pairs`);
+    pairs.forEach((p, idx) => {
+      Logger.log(`[parseJavaObjectString] Pair ${idx}: "${p.key}" = "${p.value}"`);
+    });
+  }
+  
   // Find and return the requested key's value
   const pair = pairs.find(p => p.key === key);
-  return pair ? pair.value : null;
+  const result = pair ? pair.value : null;
+  
+  if (debug) {
+    Logger.log(`[parseJavaObjectString] Result for key "${key}": ${result}`);
+  }
+  
+  return result;
 }
 
 /**
@@ -392,35 +446,81 @@ function parseJavaObjectString(javaObjStr, key) {
  * @returns {{symbol: string, description: string}}
  */
 function extractSymbolInfo(symbolData) {
+  const debug = isDebugMode();
   let symbol = 'N/A';
   let description = '';
   
+  if (debug) {
+    Logger.log(`[extractSymbolInfo] Input type: ${typeof symbolData}`);
+    Logger.log(`[extractSymbolInfo] Input is null: ${symbolData === null}`);
+    Logger.log(`[extractSymbolInfo] Input is undefined: ${symbolData === undefined}`);
+    Logger.log(`[extractSymbolInfo] Input is array: ${Array.isArray(symbolData)}`);
+  }
+  
   if (!symbolData) {
+    if (debug) Logger.log(`[extractSymbolInfo] symbolData is null/undefined, returning defaults`);
+    return { symbol, description };
+  }
+  
+  // Handle array format (take first element)
+  if (Array.isArray(symbolData)) {
+    if (debug) Logger.log(`[extractSymbolInfo] symbolData is array with ${symbolData.length} elements`);
+    if (symbolData.length > 0) {
+      return extractSymbolInfo(symbolData[0]);
+    }
     return { symbol, description };
   }
   
   // Check if it's a string (Java object format or JSON)
   if (typeof symbolData === 'string') {
+    if (debug) Logger.log(`[extractSymbolInfo] symbolData is string: ${symbolData.substring(0, 100)}...`);
+    
     // Try JSON parsing first
     try {
       const parsed = JSON.parse(symbolData);
+      if (debug) Logger.log(`[extractSymbolInfo] Successfully parsed as JSON`);
       if (parsed && typeof parsed === 'object') {
         symbol = parsed.symbol || 'N/A';
         description = parsed.description || '';
+        if (debug) Logger.log(`[extractSymbolInfo] Extracted from JSON - symbol: ${symbol}, description: ${description}`);
         return { symbol, description };
       }
     } catch (e) {
-      // Not JSON, continue with Java object parsing
+      if (debug) Logger.log(`[extractSymbolInfo] Not valid JSON, trying Java object parsing`);
     }
     
     // Parse as Java object string
     symbol = parseJavaObjectString(symbolData, 'symbol') || 'N/A';
     description = parseJavaObjectString(symbolData, 'description') || '';
+    if (debug) Logger.log(`[extractSymbolInfo] Extracted from Java string - symbol: ${symbol}, description: ${description}`);
   } 
   // Check if it's an object
   else if (typeof symbolData === 'object') {
-    symbol = symbolData.symbol || 'N/A';
-    description = symbolData.description || '';
+    if (debug) {
+      Logger.log(`[extractSymbolInfo] symbolData is object`);
+      Logger.log(`[extractSymbolInfo] Object keys: ${Object.keys(symbolData).join(', ')}`);
+    }
+    
+    // Handle nested symbol.symbol structure
+    if (symbolData.symbol && typeof symbolData.symbol === 'object') {
+      if (debug) Logger.log(`[extractSymbolInfo] Detected nested symbol.symbol structure`);
+      symbol = symbolData.symbol.symbol || 'N/A';
+      description = symbolData.symbol.description || symbolData.description || '';
+    } else if (symbolData.symbol && typeof symbolData.symbol === 'string') {
+      symbol = symbolData.symbol;
+      description = symbolData.description || '';
+    } else {
+      // Check if object is empty
+      const keys = Object.keys(symbolData);
+      if (keys.length === 0) {
+        if (debug) Logger.log(`[extractSymbolInfo] Empty object, using defaults`);
+      } else {
+        symbol = symbolData.symbol || 'N/A';
+        description = symbolData.description || '';
+      }
+    }
+    
+    if (debug) Logger.log(`[extractSymbolInfo] Extracted from object - symbol: ${symbol}, description: ${description}`);
   }
   
   return { symbol, description };
@@ -430,8 +530,18 @@ function extractSymbolInfo(symbolData) {
  * Fetches holdings for all accounts and writes to sheet.
  */
 function refreshHoldings() {
+  const debug = isDebugMode();
+  
   try {
+    if (debug) Logger.log('[refreshHoldings] Starting holdings refresh');
+    
     const accounts = snapTradeRequest('GET', '/api/v1/accounts', {}, null);
+    
+    if (debug) {
+      Logger.log(`[refreshHoldings] Retrieved ${accounts.length} accounts`);
+      Logger.log(`[refreshHoldings] Accounts data: ${JSON.stringify(accounts)}`);
+    }
+    
     const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
     const sheet = spreadsheet.getSheetByName('Holdings') || spreadsheet.insertSheet('Holdings');
 
@@ -449,13 +559,47 @@ function refreshHoldings() {
     ]);
 
     const rows = [];
+    let positionCount = 0;
 
-    accounts.forEach((account) => {
+    accounts.forEach((account, accountIndex) => {
+      if (debug) {
+        Logger.log(`[refreshHoldings] Processing account ${accountIndex + 1}/${accounts.length}: ${account.name || account.number} (ID: ${account.id})`);
+      }
+      
       const holdings = snapTradeRequest('GET', `/api/v1/accounts/${account.id}/holdings`, {}, null);
+      
+      if (debug) {
+        Logger.log(`[refreshHoldings] Raw holdings response for account ${account.id}:`);
+        Logger.log(JSON.stringify(holdings));
+      }
 
       if (holdings.positions) {
-        holdings.positions.forEach((position) => {
+        if (debug) {
+          Logger.log(`[refreshHoldings] Account has ${holdings.positions.length} positions`);
+        }
+        
+        holdings.positions.forEach((position, posIndex) => {
+          positionCount++;
+          
+          // Log first 3 positions in detail
+          if (debug && positionCount <= 3) {
+            Logger.log(`[refreshHoldings] === Position ${positionCount} Full Structure ===`);
+            Logger.log(JSON.stringify(position));
+            Logger.log(`[refreshHoldings] position.symbol type: ${typeof position.symbol}`);
+            Logger.log(`[refreshHoldings] position.symbol value: ${JSON.stringify(position.symbol)}`);
+          }
+          
+          if (debug) {
+            Logger.log(`[refreshHoldings] Processing position ${posIndex + 1}/${holdings.positions.length} in account ${account.id}`);
+            Logger.log(`[refreshHoldings] Raw symbol data before extraction: ${JSON.stringify(position.symbol)}`);
+          }
+          
           const symbolInfo = extractSymbolInfo(position.symbol);
+          
+          if (debug) {
+            Logger.log(`[refreshHoldings] Extracted symbol info: symbol="${symbolInfo.symbol}", description="${symbolInfo.description}"`);
+          }
+          
           const symbol = symbolInfo.symbol;
           const description = symbolInfo.description;
           const units = position.units || 0;
@@ -475,18 +619,33 @@ function refreshHoldings() {
             (position.currency && position.currency.code) || 'USD',
           ]);
         });
+      } else {
+        if (debug) {
+          Logger.log(`[refreshHoldings] No positions found for account ${account.id}`);
+        }
       }
     });
+
+    if (debug) {
+      Logger.log(`[refreshHoldings] Total positions processed: ${positionCount}`);
+      Logger.log(`[refreshHoldings] Total rows to write: ${rows.length}`);
+    }
 
     if (rows.length > 0) {
       sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
     }
 
     sheet.getRange(2, 5, Math.max(rows.length, 1), 4).setNumberFormat('$#,##0.00');
-    SpreadsheetApp.getUi().alert(`Refreshed ${rows.length} positions from ${accounts.length} accounts.`);
+    
+    const message = `Refreshed ${rows.length} positions from ${accounts.length} accounts.`;
+    if (debug) Logger.log(`[refreshHoldings] ${message}`);
+    
+    SpreadsheetApp.getUi().alert(message);
   } catch (error) {
-    SpreadsheetApp.getUi().alert(`Error refreshing holdings: ${error.message}`);
-    Logger.log(`refreshHoldings error: ${error.message}`);
+    const errorMsg = `Error refreshing holdings: ${error.message}`;
+    Logger.log(`[refreshHoldings] ${errorMsg}`);
+    Logger.log(`[refreshHoldings] Stack trace: ${error.stack}`);
+    SpreadsheetApp.getUi().alert(errorMsg);
   }
 }
 
@@ -618,6 +777,7 @@ function onOpen(e) {
         .addItem('Configure API Keys', 'showApiKeyDialog')
         .addItem('Register User', 'showRegisterDialog')
         .addItem('Broker Capabilities', 'showBrokerStatusDialog')
+        .addItem('Toggle Debug Mode', 'toggleDebugMode')
         .addItem('Help & Docs', 'showHelpDialog')
         .addItem('Clear All Data', 'clearAllData')
     )
