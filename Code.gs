@@ -322,13 +322,13 @@ function parseJavaObjectString(javaObjStr, key) {
       braceDepth++;
       if (!inKey) currentValue += char;
     } else if (char === '}') {
-      braceDepth--;
+      braceDepth = Math.max(0, braceDepth - 1);
       if (!inKey) currentValue += char;
     } else if (char === '[') {
       bracketDepth++;
       if (!inKey) currentValue += char;
     } else if (char === ']') {
-      bracketDepth--;
+      bracketDepth = Math.max(0, bracketDepth - 1);
       if (!inKey) currentValue += char;
     } else if (char === '=' && braceDepth === 0 && bracketDepth === 0 && inKey) {
       // Found the key-value separator
@@ -346,7 +346,10 @@ function parseJavaObjectString(javaObjStr, key) {
       // This handles patterns like: "currencies=[Ljava.lang.Object;@773b7135, figi_code=BBG004Z0CPF7"
       let lookahead = i + 1;
       let possibleKey = '';
-      while (lookahead < content.length && content[lookahead] !== '=' && content[lookahead] !== ',' && content[lookahead] !== '{' && content[lookahead] !== '}') {
+      const maxLookahead = 100; // Limit lookahead to prevent performance issues
+      while (lookahead < content.length && lookahead < i + maxLookahead && 
+             content[lookahead] !== '=' && content[lookahead] !== ',' && 
+             content[lookahead] !== '{' && content[lookahead] !== '}') {
         possibleKey += content[lookahead];
         lookahead++;
       }
