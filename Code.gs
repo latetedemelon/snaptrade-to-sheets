@@ -473,7 +473,8 @@ function extractSymbolInfo(symbolData) {
   
   // Check if it's a string (Java object format or JSON)
   if (typeof symbolData === 'string') {
-    if (debug) Logger.log(`[extractSymbolInfo] symbolData is string: ${symbolData.substring(0, 100)}...`);
+    const preview = symbolData.length > 100 ? symbolData.substring(0, 100) + '...' : symbolData;
+    if (debug) Logger.log(`[extractSymbolInfo] symbolData is string: ${preview}`);
     
     // Try JSON parsing first
     try {
@@ -531,6 +532,7 @@ function extractSymbolInfo(symbolData) {
  */
 function refreshHoldings() {
   const debug = isDebugMode();
+  const MAX_DETAILED_POSITIONS = 3; // Number of positions to log in full detail
   
   try {
     if (debug) Logger.log('[refreshHoldings] Starting holdings refresh');
@@ -581,8 +583,8 @@ function refreshHoldings() {
         holdings.positions.forEach((position, posIndex) => {
           positionCount++;
           
-          // Log first 3 positions in detail
-          if (debug && positionCount <= 3) {
+          // Log first few positions in detail
+          if (debug && positionCount <= MAX_DETAILED_POSITIONS) {
             Logger.log(`[refreshHoldings] === Position ${positionCount} Full Structure ===`);
             Logger.log(JSON.stringify(position));
             Logger.log(`[refreshHoldings] position.symbol type: ${typeof position.symbol}`);
