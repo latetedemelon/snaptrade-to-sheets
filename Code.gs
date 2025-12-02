@@ -341,7 +341,9 @@ function parseJavaObjectString(javaObjStr, key) {
       inKey = true;
     } else if (char === ' ' && bracketDepth > 0 && !inKey) {
       // Special handling for unclosed brackets in Java array representations
-      // Check if we have a pattern like ", key=" which indicates a new field
+      // Java's toString() for arrays like "[Ljava.lang.Object;@hash" doesn't include closing brackets
+      // When we're inside brackets and hit a space, check if the next non-whitespace looks like a new key-value pair
+      // This handles patterns like: "currencies=[Ljava.lang.Object;@773b7135, figi_code=BBG004Z0CPF7"
       let lookahead = i + 1;
       let possibleKey = '';
       while (lookahead < content.length && content[lookahead] !== '=' && content[lookahead] !== ',' && content[lookahead] !== '{' && content[lookahead] !== '}') {
@@ -375,14 +377,9 @@ function parseJavaObjectString(javaObjStr, key) {
     pairs.push({ key: currentKey.trim(), value: currentValue.trim() });
   }
   
-  // Find the requested key
-  for (let i = 0; i < pairs.length; i++) {
-    if (pairs[i].key === key) {
-      return pairs[i].value;
-    }
-  }
-  
-  return null;
+  // Find and return the requested key's value
+  const pair = pairs.find(p => p.key === key);
+  return pair ? pair.value : null;
 }
 
 /**
