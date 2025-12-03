@@ -134,6 +134,100 @@ function snapTradeRequestWithRetry(method, path, params, body, maxRetries) {
 }
 
 /**
+ * Fetches data from multiple accounts in parallel using UrlFetchApp.fetchAll().
+ * 
+ * CURRENT LIMITATIONS:
+ * - UrlFetchApp.fetchAll() has a maximum of 100 requests per batch
+ * - Google Apps Script has a 6-minute execution limit
+ * 
+ * FUTURE ENHANCEMENT: For users with 50+ accounts, implement batch processing
+ * by splitting requests into batches of 50 each to stay well under the 100 limit
+ * and provide better error recovery.
+ * 
+ * @param {Array} accounts - Array of account objects from SnapTrade API
+ * @param {string} endpointSuffix - Endpoint suffix (e.g., 'holdings', 'balances')
+ * @returns {Object} Map of accountId to response data
+ */
+function fetchAccountDataInParallel(accounts, endpointSuffix) {
+  const debug = isDebugMode();
+  
+  if (debug) {
+    Logger.log(`[fetchAccountDataInParallel] Fetching ${endpointSuffix} for ${accounts.length} accounts in parallel`);
+  }
+  
+  if (!accounts || accounts.length === 0) {
+    return {};
+  }
+  
+  const context = getSnapTradeContext();
+  // Generate timestamp once and reuse for all requests in this batch.
+  // This is safe because each request has a unique path (different account IDs),
+  // which creates unique signatures even with the same timestamp.
+  // The timestamp is at second-level granularity, and all parallel requests
+  // complete within the same second.
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  
+  // Build all request objects
+  const requests = accounts.map((account) => {
+    const path = `/api/v1/accounts/${account.id}/${endpointSuffix}`;
+    
+    const params = {
+      clientId: context.clientId,
+      timestamp: timestamp,
+      userId: context.userId,
+      userSecret: context.userSecret,
+    };
+    
+    const sortedQuery = buildSortedQuery(params);
+    const signature = generateSnapTradeSignature(context.consumerKey, null, path, sortedQuery);
+    
+    return {
+      url: `https://api.snaptrade.com${path}?${sortedQuery}`,
+      method: 'get',
+      headers: { Signature: signature },
+      muteHttpExceptions: true,
+    };
+  });
+  
+  if (debug) {
+    Logger.log(`[fetchAccountDataInParallel] Executing ${requests.length} parallel requests`);
+  }
+  
+  // Execute all requests in parallel
+  const responses = UrlFetchApp.fetchAll(requests);
+  
+  // Process responses and build result map
+  const resultMap = {};
+  
+  responses.forEach((response, index) => {
+    const account = accounts[index];
+    const code = response.getResponseCode();
+    const content = response.getContentText();
+    
+    if (code >= 200 && code < 300) {
+      try {
+        resultMap[account.id] = JSON.parse(content);
+        if (debug) {
+          Logger.log(`[fetchAccountDataInParallel] Successfully fetched ${endpointSuffix} for account ${account.id}`);
+        }
+      } catch (error) {
+        Logger.log(`[fetchAccountDataInParallel] Error parsing response for account ${account.id}: ${error.message}`);
+        resultMap[account.id] = null;
+      }
+    } else {
+      Logger.log(`[fetchAccountDataInParallel] Error fetching ${endpointSuffix} for account ${account.id} (${code}): ${content}`);
+      resultMap[account.id] = null;
+    }
+  });
+  
+  if (debug) {
+    Logger.log(`[fetchAccountDataInParallel] Successfully fetched data for ${Object.keys(resultMap).length} accounts`);
+  }
+  
+  return resultMap;
+}
+
+/**
  * Registers a new SnapTrade user and stores credentials in User Properties.
  * @param {string} userId
  * @returns {{userId: string, userSecret: string}}
@@ -587,21 +681,35 @@ function refreshHoldings() {
       'Description',
       'Quantity',
       'Price',
+      'Price (CAD)',
       'Market Value',
+      'Market Value (CAD)',
       'Cost Basis',
+      'Cost Basis (CAD)',
       'Gain/Loss',
+      'Gain/Loss (CAD)',
       'Currency',
     ]);
 
     const rows = [];
     let positionCount = 0;
 
+    // Fetch all holdings in parallel
+    const holdingsMap = fetchAccountDataInParallel(accounts, 'holdings');
+
     accounts.forEach((account, accountIndex) => {
       if (debug) {
         Logger.log(`[refreshHoldings] Processing account ${accountIndex + 1}/${accounts.length}: ${account.name || account.number} (ID: ${account.id})`);
       }
       
-      const holdings = snapTradeRequest('GET', `/api/v1/accounts/${account.id}/holdings`, {}, null);
+      const holdings = holdingsMap[account.id];
+      
+      if (!holdings) {
+        if (debug) {
+          Logger.log(`[refreshHoldings] No holdings data for account ${account.id}`);
+        }
+        return;
+      }
       
       if (debug) {
         Logger.log(`[refreshHoldings] Raw holdings response for account ${account.id}:`);
@@ -641,17 +749,23 @@ function refreshHoldings() {
           const price = position.price || 0;
           const marketValue = units * price;
           const costBasis = units * (position.average_purchase_price || 0);
-
+          const currency = (position.currency && position.currency.code) || 'USD';
+          
+          // We'll add formulas for CAD conversion after writing the data
           rows.push([
             account.name || account.number,
             symbol,
             description,
             units,
             price,
+            '', // Price (CAD) - will be filled with formula
             marketValue,
+            '', // Market Value (CAD) - will be filled with formula
             costBasis,
+            '', // Cost Basis (CAD) - will be filled with formula
             marketValue - costBasis,
-            (position.currency && position.currency.code) || 'USD',
+            '', // Gain/Loss (CAD) - will be filled with formula
+            currency,
           ]);
         });
       } else {
@@ -668,15 +782,52 @@ function refreshHoldings() {
 
     if (rows.length > 0) {
       sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
+      
+      // Add formulas for CAD conversion using R1C1 notation for batch operations
+      // Column M is Currency (col 13), E is Price (col 5), G is Market Value (col 7), I is Cost Basis (col 9), K is Gain/Loss (col 11)
+      
+      // Build formula arrays for batch insertion
+      const priceCADFormulas = [];
+      const marketValueCADFormulas = [];
+      const costBasisCADFormulas = [];
+      const gainLossCADFormulas = [];
+      
+      for (let i = 0; i < rows.length; i++) {
+        const rowNum = i + 2; // Data starts at row 2
+        
+        // Using R1C1 notation: RC[x] means same row, column offset by x
+        priceCADFormulas.push([`=IF(RC[7]="CAD", RC[-1], IF(RC[7]="", RC[-1], RC[-1] * GOOGLEFINANCE("CURRENCY:" & RC[7] & "CAD")))`]);
+        marketValueCADFormulas.push([`=IF(RC[5]="CAD", RC[-1], IF(RC[5]="", RC[-1], RC[-1] * GOOGLEFINANCE("CURRENCY:" & RC[5] & "CAD")))`]);
+        costBasisCADFormulas.push([`=IF(RC[3]="CAD", RC[-1], IF(RC[3]="", RC[-1], RC[-1] * GOOGLEFINANCE("CURRENCY:" & RC[3] & "CAD")))`]);
+        gainLossCADFormulas.push([`=IF(RC[1]="CAD", RC[-1], IF(RC[1]="", RC[-1], RC[-1] * GOOGLEFINANCE("CURRENCY:" & RC[1] & "CAD")))`]);
+      }
+      
+      // Set all formulas at once
+      sheet.getRange(2, 6, rows.length, 1).setFormulasR1C1(priceCADFormulas);
+      sheet.getRange(2, 8, rows.length, 1).setFormulasR1C1(marketValueCADFormulas);
+      sheet.getRange(2, 10, rows.length, 1).setFormulasR1C1(costBasisCADFormulas);
+      sheet.getRange(2, 12, rows.length, 1).setFormulasR1C1(gainLossCADFormulas);
     }
 
-    sheet.getRange(2, 5, Math.max(rows.length, 1), 4).setNumberFormat('$#,##0.00');
+    // Format price and value columns as currency
+    // Original columns: E (Price), G (Market Value), I (Cost Basis), K (Gain/Loss)
+    // CAD columns: F, H, J, L
+    if (rows.length > 0) {
+      sheet.getRange(2, 5, rows.length, 1).setNumberFormat('$#,##0.00'); // Price
+      sheet.getRange(2, 6, rows.length, 1).setNumberFormat('$#,##0.00'); // Price (CAD)
+      sheet.getRange(2, 7, rows.length, 1).setNumberFormat('$#,##0.00'); // Market Value
+      sheet.getRange(2, 8, rows.length, 1).setNumberFormat('$#,##0.00'); // Market Value (CAD)
+      sheet.getRange(2, 9, rows.length, 1).setNumberFormat('$#,##0.00'); // Cost Basis
+      sheet.getRange(2, 10, rows.length, 1).setNumberFormat('$#,##0.00'); // Cost Basis (CAD)
+      sheet.getRange(2, 11, rows.length, 1).setNumberFormat('$#,##0.00'); // Gain/Loss
+      sheet.getRange(2, 12, rows.length, 1).setNumberFormat('$#,##0.00'); // Gain/Loss (CAD)
+    }
     
     // Format header row
     formatSheetHeader(sheet);
     
     // Auto-resize columns for better readability
-    sheet.autoResizeColumns(1, 9);
+    sheet.autoResizeColumns(1, 13);
     
     const message = `Refreshed ${rows.length} positions from ${accounts.length} accounts.`;
     if (debug) Logger.log(`[refreshHoldings] ${message}`);
@@ -704,6 +855,7 @@ function refreshAccounts() {
     sheet.appendRow([
       'Account Name',
       'Balance',
+      'Balance (CAD)',
       'Currency',
       'Notes',
       'Last Update',
@@ -714,14 +866,23 @@ function refreshAccounts() {
 
     const rows = [];
     
+    // Fetch balances for all accounts in parallel
+    const balancesMap = fetchAccountDataInParallel(accounts, 'balances');
+    
     // Fetch balances for each account to show separate rows per currency
     accounts.forEach((account) => {
-      const balances = snapTradeRequest('GET', `/api/v1/accounts/${account.id}/balances`, {}, null);
+      const balances = balancesMap[account.id];
+      
+      if (!balances) {
+        Logger.log(`refreshAccounts: No balances data for account ${account.id}`);
+        return;
+      }
       
       balances.forEach((bal) => {
         rows.push([
           account.name || account.number,
           bal.cash || 0,
+          '', // Balance (CAD) - will be filled with formula
           (bal.currency && bal.currency.code) || '',
           '',
           (account.sync_status && account.sync_status.holdings && account.sync_status.holdings.last_successful_sync) || '',
@@ -734,20 +895,35 @@ function refreshAccounts() {
 
     if (rows.length > 0) {
       sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
-      sheet.getRange(2, 2, rows.length, 1).setNumberFormat('$#,##0.00');
+      
+      // Add formulas for CAD conversion using R1C1 notation for batch operations
+      // Column D is Currency (col 4), B is Balance (col 2)
+      const balanceCADFormulas = [];
+      
+      for (let i = 0; i < rows.length; i++) {
+        // Using R1C1 notation: RC[x] means same row, column offset by x
+        balanceCADFormulas.push([`=IF(RC[1]="CAD", RC[-1], IF(RC[1]="", RC[-1], RC[-1] * GOOGLEFINANCE("CURRENCY:" & RC[1] & "CAD")))`]);
+      }
+      
+      // Set all formulas at once
+      sheet.getRange(2, 3, rows.length, 1).setFormulasR1C1(balanceCADFormulas);
+      
+      // Format balance columns as currency
+      sheet.getRange(2, 2, rows.length, 1).setNumberFormat('$#,##0.00'); // Balance
+      sheet.getRange(2, 3, rows.length, 1).setNumberFormat('$#,##0.00'); // Balance (CAD)
     }
     
     // Format header row
     formatSheetHeader(sheet);
     
     // Auto-resize columns for better readability (excluding Raw Data column which can be very wide)
-    sheet.autoResizeColumns(1, 7);
+    sheet.autoResizeColumns(1, 8);
     
     // Hide Account ID and Raw Data columns by default
-    sheet.hideColumns(7, 2);
+    sheet.hideColumns(8, 2);
     
-    // Automatically update account history (once per day)
-    updateAccountHistoryOnce(accounts);
+    // Automatically update account history (once per day) - pass the already fetched balances
+    updateAccountHistoryOnce(accounts, balancesMap);
     
     SpreadsheetApp.getUi().alert(`Refreshed ${rows.length} account balances from ${accounts.length} accounts.`);
   } catch (error) {
@@ -777,14 +953,15 @@ function trackAccountHistory() {
  * Updates account history, but only once per day. If called multiple times in the same day,
  * updates existing rows instead of creating new ones.
  * @param {Array} accounts - Array of account objects from SnapTrade API
+ * @param {Object} balancesMap - Optional map of accountId to balances data (to avoid duplicate API calls)
  */
-function updateAccountHistoryOnce(accounts) {
+function updateAccountHistoryOnce(accounts, balancesMap) {
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = spreadsheet.getSheetByName('Account History') || spreadsheet.insertSheet('Account History');
   
   // Initialize sheet if empty
   if (sheet.getLastRow() === 0) {
-    sheet.appendRow(['Timestamp', 'Account Name', 'Account ID', 'Balance', 'Currency', 'Institution']);
+    sheet.appendRow(['Timestamp', 'Account Name', 'Account ID', 'Balance', 'Balance (CAD)', 'Currency', 'Institution']);
     formatSheetHeader(sheet);
   }
   
@@ -818,15 +995,24 @@ function updateAccountHistoryOnce(accounts) {
   const rows = [];
   
   // Fetch balances for each account to match Accounts sheet data source
+  // Use prefetched balances if available, otherwise fetch them
+  const accountBalancesMap = balancesMap || fetchAccountDataInParallel(accounts, 'balances');
+  
   accounts.forEach((account) => {
-    const balances = snapTradeRequest('GET', `/api/v1/accounts/${account.id}/balances`, {}, null);
+    const accountBalances = accountBalancesMap[account.id];
     
-    balances.forEach((bal) => {
+    if (!accountBalances) {
+      Logger.log(`updateAccountHistoryOnce: No balances data for account ${account.id}`);
+      return;
+    }
+    
+    accountBalances.forEach((bal) => {
       rows.push([
         timestamp,
         account.name || account.number,
         account.id || '',
         bal.cash || 0,
+        '', // Balance (CAD) - will be filled with formula
         (bal.currency && bal.currency.code) || '',
         account.institution_name || '',
       ]);
@@ -848,15 +1034,28 @@ function updateAccountHistoryOnce(accounts) {
     
     sheet.getRange(startRow, 1, rows.length, rows[0].length).setValues(rows);
     
-    // Format balance column as currency
-    sheet.getRange(startRow, 4, rows.length, 1).setNumberFormat('$#,##0.00');
+    // Add formulas for CAD conversion using R1C1 notation for batch operations
+    // Column F is Currency (col 6), D is Balance (col 4)
+    const balanceCADFormulas = [];
+    
+    for (let i = 0; i < rows.length; i++) {
+      // Using R1C1 notation: RC[x] means same row, column offset by x
+      balanceCADFormulas.push([`=IF(RC[1]="CAD", RC[-1], IF(RC[1]="", RC[-1], RC[-1] * GOOGLEFINANCE("CURRENCY:" & RC[1] & "CAD")))`]);
+    }
+    
+    // Set all formulas at once
+    sheet.getRange(startRow, 5, rows.length, 1).setFormulasR1C1(balanceCADFormulas);
+    
+    // Format balance columns as currency
+    sheet.getRange(startRow, 4, rows.length, 1).setNumberFormat('$#,##0.00'); // Balance
+    sheet.getRange(startRow, 5, rows.length, 1).setNumberFormat('$#,##0.00'); // Balance (CAD)
     
     // Format timestamp column to show only date
     sheet.getRange(startRow, 1, rows.length, 1).setNumberFormat('yyyy-mm-dd');
   }
   
-  // Auto-resize columns (6 columns: Timestamp, Account Name, Account ID, Balance, Currency, Institution)
-  sheet.autoResizeColumns(1, 6);
+  // Auto-resize columns (7 columns: Timestamp, Account Name, Account ID, Balance, Balance (CAD), Currency, Institution)
+  sheet.autoResizeColumns(1, 7);
 }
 
 /**
@@ -878,6 +1077,8 @@ function refreshTransactions(startDate, endDate) {
     sheet.appendRow([
       'Date',
       'Amount',
+      'Amount (CAD)',
+      'Currency',
       'Description',
       'Category',
       'Account',
@@ -889,6 +1090,8 @@ function refreshTransactions(startDate, endDate) {
     const rows = transactions.map((tx) => [
       tx.trade_date || tx.settlement_date,
       tx.amount || 0,
+      '', // Amount (CAD) - will be filled with formula
+      (tx.currency && tx.currency.code) || (tx.symbol && tx.symbol.currency && tx.symbol.currency.code) || 'USD', // Try to get currency from transaction
       tx.description || '',
       tx.type,
       (tx.account && (tx.account.name || tx.account.number)) || '',
@@ -899,17 +1102,32 @@ function refreshTransactions(startDate, endDate) {
 
     if (rows.length > 0) {
       sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
-      sheet.getRange(2, 2, rows.length, 1).setNumberFormat('$#,##0.00');
+      
+      // Add formulas for CAD conversion using R1C1 notation for batch operations
+      // Column D is Currency (col 4), B is Amount (col 2)
+      const amountCADFormulas = [];
+      
+      for (let i = 0; i < rows.length; i++) {
+        // Using R1C1 notation: RC[x] means same row, column offset by x
+        amountCADFormulas.push([`=IF(RC[1]="CAD", RC[-1], IF(RC[1]="", RC[-1], RC[-1] * GOOGLEFINANCE("CURRENCY:" & RC[1] & "CAD")))`]);
+      }
+      
+      // Set all formulas at once
+      sheet.getRange(2, 3, rows.length, 1).setFormulasR1C1(amountCADFormulas);
+      
+      // Format amount columns as currency
+      sheet.getRange(2, 2, rows.length, 1).setNumberFormat('$#,##0.00'); // Amount
+      sheet.getRange(2, 3, rows.length, 1).setNumberFormat('$#,##0.00'); // Amount (CAD)
     }
     
     // Format header row
     formatSheetHeader(sheet);
     
     // Auto-resize columns for better readability (excluding Raw Data column which can be very wide)
-    sheet.autoResizeColumns(1, 6);
+    sheet.autoResizeColumns(1, 8);
     
     // Hide Transaction ID and Raw Data columns by default
-    sheet.hideColumns(7, 2);
+    sheet.hideColumns(9, 2);
     
     SpreadsheetApp.getUi().alert(`Refreshed ${rows.length} transactions.`);
   } catch (error) {
