@@ -134,6 +134,86 @@ function snapTradeRequestWithRetry(method, path, params, body, maxRetries) {
 }
 
 /**
+ * Fetches data from multiple accounts in parallel using UrlFetchApp.fetchAll().
+ * @param {Array} accounts - Array of account objects from SnapTrade API
+ * @param {string} endpointSuffix - Endpoint suffix (e.g., 'holdings', 'balances')
+ * @returns {Object} Map of accountId to response data
+ */
+function fetchAccountDataInParallel(accounts, endpointSuffix) {
+  const debug = isDebugMode();
+  
+  if (debug) {
+    Logger.log(`[fetchAccountDataInParallel] Fetching ${endpointSuffix} for ${accounts.length} accounts in parallel`);
+  }
+  
+  if (!accounts || accounts.length === 0) {
+    return {};
+  }
+  
+  const context = getSnapTradeContext();
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  
+  // Build all request objects
+  const requests = accounts.map((account) => {
+    const path = `/api/v1/accounts/${account.id}/${endpointSuffix}`;
+    
+    const params = {
+      clientId: context.clientId,
+      timestamp: timestamp,
+      userId: context.userId,
+      userSecret: context.userSecret,
+    };
+    
+    const sortedQuery = buildSortedQuery(params);
+    const signature = generateSnapTradeSignature(context.consumerKey, null, path, sortedQuery);
+    
+    return {
+      url: `https://api.snaptrade.com${path}?${sortedQuery}`,
+      method: 'get',
+      headers: { Signature: signature },
+      muteHttpExceptions: true,
+    };
+  });
+  
+  if (debug) {
+    Logger.log(`[fetchAccountDataInParallel] Executing ${requests.length} parallel requests`);
+  }
+  
+  // Execute all requests in parallel
+  const responses = UrlFetchApp.fetchAll(requests);
+  
+  // Process responses and build result map
+  const resultMap = {};
+  
+  responses.forEach((response, index) => {
+    const account = accounts[index];
+    const code = response.getResponseCode();
+    const content = response.getContentText();
+    
+    if (code >= 200 && code < 300) {
+      try {
+        resultMap[account.id] = JSON.parse(content);
+        if (debug) {
+          Logger.log(`[fetchAccountDataInParallel] Successfully fetched ${endpointSuffix} for account ${account.id}`);
+        }
+      } catch (error) {
+        Logger.log(`[fetchAccountDataInParallel] Error parsing response for account ${account.id}: ${error.message}`);
+        resultMap[account.id] = null;
+      }
+    } else {
+      Logger.log(`[fetchAccountDataInParallel] Error fetching ${endpointSuffix} for account ${account.id} (${code}): ${content}`);
+      resultMap[account.id] = null;
+    }
+  });
+  
+  if (debug) {
+    Logger.log(`[fetchAccountDataInParallel] Successfully fetched data for ${Object.keys(resultMap).length} accounts`);
+  }
+  
+  return resultMap;
+}
+
+/**
  * Registers a new SnapTrade user and stores credentials in User Properties.
  * @param {string} userId
  * @returns {{userId: string, userSecret: string}}
@@ -596,12 +676,22 @@ function refreshHoldings() {
     const rows = [];
     let positionCount = 0;
 
+    // Fetch all holdings in parallel
+    const holdingsMap = fetchAccountDataInParallel(accounts, 'holdings');
+
     accounts.forEach((account, accountIndex) => {
       if (debug) {
         Logger.log(`[refreshHoldings] Processing account ${accountIndex + 1}/${accounts.length}: ${account.name || account.number} (ID: ${account.id})`);
       }
       
-      const holdings = snapTradeRequest('GET', `/api/v1/accounts/${account.id}/holdings`, {}, null);
+      const holdings = holdingsMap[account.id];
+      
+      if (!holdings) {
+        if (debug) {
+          Logger.log(`[refreshHoldings] No holdings data for account ${account.id}`);
+        }
+        return;
+      }
       
       if (debug) {
         Logger.log(`[refreshHoldings] Raw holdings response for account ${account.id}:`);
@@ -714,9 +804,17 @@ function refreshAccounts() {
 
     const rows = [];
     
+    // Fetch balances for all accounts in parallel
+    const balancesMap = fetchAccountDataInParallel(accounts, 'balances');
+    
     // Fetch balances for each account to show separate rows per currency
     accounts.forEach((account) => {
-      const balances = snapTradeRequest('GET', `/api/v1/accounts/${account.id}/balances`, {}, null);
+      const balances = balancesMap[account.id];
+      
+      if (!balances) {
+        Logger.log(`refreshAccounts: No balances data for account ${account.id}`);
+        return;
+      }
       
       balances.forEach((bal) => {
         rows.push([
@@ -746,8 +844,8 @@ function refreshAccounts() {
     // Hide Account ID and Raw Data columns by default
     sheet.hideColumns(7, 2);
     
-    // Automatically update account history (once per day)
-    updateAccountHistoryOnce(accounts);
+    // Automatically update account history (once per day) - pass the already-fetched balances
+    updateAccountHistoryOnce(accounts, balancesMap);
     
     SpreadsheetApp.getUi().alert(`Refreshed ${rows.length} account balances from ${accounts.length} accounts.`);
   } catch (error) {
@@ -777,8 +875,9 @@ function trackAccountHistory() {
  * Updates account history, but only once per day. If called multiple times in the same day,
  * updates existing rows instead of creating new ones.
  * @param {Array} accounts - Array of account objects from SnapTrade API
+ * @param {Object} balancesMap - Optional map of accountId to balances data (to avoid duplicate API calls)
  */
-function updateAccountHistoryOnce(accounts) {
+function updateAccountHistoryOnce(accounts, balancesMap) {
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = spreadsheet.getSheetByName('Account History') || spreadsheet.insertSheet('Account History');
   
@@ -818,10 +917,18 @@ function updateAccountHistoryOnce(accounts) {
   const rows = [];
   
   // Fetch balances for each account to match Accounts sheet data source
+  // Use pre-fetched balances if available, otherwise fetch them
+  const balances = balancesMap || fetchAccountDataInParallel(accounts, 'balances');
+  
   accounts.forEach((account) => {
-    const balances = snapTradeRequest('GET', `/api/v1/accounts/${account.id}/balances`, {}, null);
+    const accountBalances = balances[account.id];
     
-    balances.forEach((bal) => {
+    if (!accountBalances) {
+      Logger.log(`updateAccountHistoryOnce: No balances data for account ${account.id}`);
+      return;
+    }
+    
+    accountBalances.forEach((bal) => {
       rows.push([
         timestamp,
         account.name || account.number,
