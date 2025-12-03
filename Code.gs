@@ -681,9 +681,13 @@ function refreshHoldings() {
       'Description',
       'Quantity',
       'Price',
+      'Price (CAD)',
       'Market Value',
+      'Market Value (CAD)',
       'Cost Basis',
+      'Cost Basis (CAD)',
       'Gain/Loss',
+      'Gain/Loss (CAD)',
       'Currency',
     ]);
 
@@ -745,17 +749,23 @@ function refreshHoldings() {
           const price = position.price || 0;
           const marketValue = units * price;
           const costBasis = units * (position.average_purchase_price || 0);
-
+          const currency = (position.currency && position.currency.code) || 'USD';
+          
+          // We'll add formulas for CAD conversion after writing the data
           rows.push([
             account.name || account.number,
             symbol,
             description,
             units,
             price,
+            '', // Price (CAD) - will be filled with formula
             marketValue,
+            '', // Market Value (CAD) - will be filled with formula
             costBasis,
+            '', // Cost Basis (CAD) - will be filled with formula
             marketValue - costBasis,
-            (position.currency && position.currency.code) || 'USD',
+            '', // Gain/Loss (CAD) - will be filled with formula
+            currency,
           ]);
         });
       } else {
@@ -772,15 +782,53 @@ function refreshHoldings() {
 
     if (rows.length > 0) {
       sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
+      
+      // Add formulas for CAD conversion
+      // Column M is Currency (col 13), E is Price (col 5), G is Market Value (col 7), I is Cost Basis (col 9), K is Gain/Loss (col 11)
+      for (let i = 0; i < rows.length; i++) {
+        const rowNum = i + 2; // Data starts at row 2
+        
+        // Price (CAD) - Column F
+        sheet.getRange(rowNum, 6).setFormula(
+          `=IF(M${rowNum}="CAD", E${rowNum}, IF(M${rowNum}="", E${rowNum}, E${rowNum} * GOOGLEFINANCE("CURRENCY:" & M${rowNum} & "CAD")))`
+        );
+        
+        // Market Value (CAD) - Column H
+        sheet.getRange(rowNum, 8).setFormula(
+          `=IF(M${rowNum}="CAD", G${rowNum}, IF(M${rowNum}="", G${rowNum}, G${rowNum} * GOOGLEFINANCE("CURRENCY:" & M${rowNum} & "CAD")))`
+        );
+        
+        // Cost Basis (CAD) - Column J
+        sheet.getRange(rowNum, 10).setFormula(
+          `=IF(M${rowNum}="CAD", I${rowNum}, IF(M${rowNum}="", I${rowNum}, I${rowNum} * GOOGLEFINANCE("CURRENCY:" & M${rowNum} & "CAD")))`
+        );
+        
+        // Gain/Loss (CAD) - Column L
+        sheet.getRange(rowNum, 12).setFormula(
+          `=IF(M${rowNum}="CAD", K${rowNum}, IF(M${rowNum}="", K${rowNum}, K${rowNum} * GOOGLEFINANCE("CURRENCY:" & M${rowNum} & "CAD")))`
+        );
+      }
     }
 
-    sheet.getRange(2, 5, Math.max(rows.length, 1), 4).setNumberFormat('$#,##0.00');
+    // Format price and value columns as currency
+    // Original columns: E (Price), G (Market Value), I (Cost Basis), K (Gain/Loss)
+    // CAD columns: F, H, J, L
+    if (rows.length > 0) {
+      sheet.getRange(2, 5, rows.length, 1).setNumberFormat('$#,##0.00'); // Price
+      sheet.getRange(2, 6, rows.length, 1).setNumberFormat('$#,##0.00'); // Price (CAD)
+      sheet.getRange(2, 7, rows.length, 1).setNumberFormat('$#,##0.00'); // Market Value
+      sheet.getRange(2, 8, rows.length, 1).setNumberFormat('$#,##0.00'); // Market Value (CAD)
+      sheet.getRange(2, 9, rows.length, 1).setNumberFormat('$#,##0.00'); // Cost Basis
+      sheet.getRange(2, 10, rows.length, 1).setNumberFormat('$#,##0.00'); // Cost Basis (CAD)
+      sheet.getRange(2, 11, rows.length, 1).setNumberFormat('$#,##0.00'); // Gain/Loss
+      sheet.getRange(2, 12, rows.length, 1).setNumberFormat('$#,##0.00'); // Gain/Loss (CAD)
+    }
     
     // Format header row
     formatSheetHeader(sheet);
     
     // Auto-resize columns for better readability
-    sheet.autoResizeColumns(1, 9);
+    sheet.autoResizeColumns(1, 13);
     
     const message = `Refreshed ${rows.length} positions from ${accounts.length} accounts.`;
     if (debug) Logger.log(`[refreshHoldings] ${message}`);
@@ -808,6 +856,7 @@ function refreshAccounts() {
     sheet.appendRow([
       'Account Name',
       'Balance',
+      'Balance (CAD)',
       'Currency',
       'Notes',
       'Last Update',
@@ -834,6 +883,7 @@ function refreshAccounts() {
         rows.push([
           account.name || account.number,
           bal.cash || 0,
+          '', // Balance (CAD) - will be filled with formula
           (bal.currency && bal.currency.code) || '',
           '',
           (account.sync_status && account.sync_status.holdings && account.sync_status.holdings.last_successful_sync) || '',
@@ -846,17 +896,31 @@ function refreshAccounts() {
 
     if (rows.length > 0) {
       sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
-      sheet.getRange(2, 2, rows.length, 1).setNumberFormat('$#,##0.00');
+      
+      // Add formulas for CAD conversion
+      // Column D is Currency (col 4), B is Balance (col 2)
+      for (let i = 0; i < rows.length; i++) {
+        const rowNum = i + 2; // Data starts at row 2
+        
+        // Balance (CAD) - Column C
+        sheet.getRange(rowNum, 3).setFormula(
+          `=IF(D${rowNum}="CAD", B${rowNum}, IF(D${rowNum}="", B${rowNum}, B${rowNum} * GOOGLEFINANCE("CURRENCY:" & D${rowNum} & "CAD")))`
+        );
+      }
+      
+      // Format balance columns as currency
+      sheet.getRange(2, 2, rows.length, 1).setNumberFormat('$#,##0.00'); // Balance
+      sheet.getRange(2, 3, rows.length, 1).setNumberFormat('$#,##0.00'); // Balance (CAD)
     }
     
     // Format header row
     formatSheetHeader(sheet);
     
     // Auto-resize columns for better readability (excluding Raw Data column which can be very wide)
-    sheet.autoResizeColumns(1, 7);
+    sheet.autoResizeColumns(1, 8);
     
     // Hide Account ID and Raw Data columns by default
-    sheet.hideColumns(7, 2);
+    sheet.hideColumns(8, 2);
     
     // Automatically update account history (once per day) - pass the already fetched balances
     updateAccountHistoryOnce(accounts, balancesMap);
@@ -897,7 +961,7 @@ function updateAccountHistoryOnce(accounts, balancesMap) {
   
   // Initialize sheet if empty
   if (sheet.getLastRow() === 0) {
-    sheet.appendRow(['Timestamp', 'Account Name', 'Account ID', 'Balance', 'Currency', 'Institution']);
+    sheet.appendRow(['Timestamp', 'Account Name', 'Account ID', 'Balance', 'Balance (CAD)', 'Currency', 'Institution']);
     formatSheetHeader(sheet);
   }
   
@@ -948,6 +1012,7 @@ function updateAccountHistoryOnce(accounts, balancesMap) {
         account.name || account.number,
         account.id || '',
         bal.cash || 0,
+        '', // Balance (CAD) - will be filled with formula
         (bal.currency && bal.currency.code) || '',
         account.institution_name || '',
       ]);
@@ -969,15 +1034,27 @@ function updateAccountHistoryOnce(accounts, balancesMap) {
     
     sheet.getRange(startRow, 1, rows.length, rows[0].length).setValues(rows);
     
-    // Format balance column as currency
-    sheet.getRange(startRow, 4, rows.length, 1).setNumberFormat('$#,##0.00');
+    // Add formulas for CAD conversion
+    // Column F is Currency (col 6), D is Balance (col 4)
+    for (let i = 0; i < rows.length; i++) {
+      const rowNum = startRow + i;
+      
+      // Balance (CAD) - Column E
+      sheet.getRange(rowNum, 5).setFormula(
+        `=IF(F${rowNum}="CAD", D${rowNum}, IF(F${rowNum}="", D${rowNum}, D${rowNum} * GOOGLEFINANCE("CURRENCY:" & F${rowNum} & "CAD")))`
+      );
+    }
+    
+    // Format balance columns as currency
+    sheet.getRange(startRow, 4, rows.length, 1).setNumberFormat('$#,##0.00'); // Balance
+    sheet.getRange(startRow, 5, rows.length, 1).setNumberFormat('$#,##0.00'); // Balance (CAD)
     
     // Format timestamp column to show only date
     sheet.getRange(startRow, 1, rows.length, 1).setNumberFormat('yyyy-mm-dd');
   }
   
-  // Auto-resize columns (6 columns: Timestamp, Account Name, Account ID, Balance, Currency, Institution)
-  sheet.autoResizeColumns(1, 6);
+  // Auto-resize columns (7 columns: Timestamp, Account Name, Account ID, Balance, Balance (CAD), Currency, Institution)
+  sheet.autoResizeColumns(1, 7);
 }
 
 /**
@@ -999,6 +1076,8 @@ function refreshTransactions(startDate, endDate) {
     sheet.appendRow([
       'Date',
       'Amount',
+      'Amount (CAD)',
+      'Currency',
       'Description',
       'Category',
       'Account',
@@ -1010,6 +1089,8 @@ function refreshTransactions(startDate, endDate) {
     const rows = transactions.map((tx) => [
       tx.trade_date || tx.settlement_date,
       tx.amount || 0,
+      '', // Amount (CAD) - will be filled with formula
+      (tx.currency && tx.currency.code) || (tx.symbol && tx.symbol.currency && tx.symbol.currency.code) || 'USD', // Try to get currency from transaction
       tx.description || '',
       tx.type,
       (tx.account && (tx.account.name || tx.account.number)) || '',
@@ -1020,17 +1101,31 @@ function refreshTransactions(startDate, endDate) {
 
     if (rows.length > 0) {
       sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
-      sheet.getRange(2, 2, rows.length, 1).setNumberFormat('$#,##0.00');
+      
+      // Add formulas for CAD conversion
+      // Column D is Currency (col 4), B is Amount (col 2)
+      for (let i = 0; i < rows.length; i++) {
+        const rowNum = i + 2; // Data starts at row 2
+        
+        // Amount (CAD) - Column C
+        sheet.getRange(rowNum, 3).setFormula(
+          `=IF(D${rowNum}="CAD", B${rowNum}, IF(D${rowNum}="", B${rowNum}, B${rowNum} * GOOGLEFINANCE("CURRENCY:" & D${rowNum} & "CAD")))`
+        );
+      }
+      
+      // Format amount columns as currency
+      sheet.getRange(2, 2, rows.length, 1).setNumberFormat('$#,##0.00'); // Amount
+      sheet.getRange(2, 3, rows.length, 1).setNumberFormat('$#,##0.00'); // Amount (CAD)
     }
     
     // Format header row
     formatSheetHeader(sheet);
     
     // Auto-resize columns for better readability (excluding Raw Data column which can be very wide)
-    sheet.autoResizeColumns(1, 6);
+    sheet.autoResizeColumns(1, 8);
     
     // Hide Transaction ID and Raw Data columns by default
-    sheet.hideColumns(7, 2);
+    sheet.hideColumns(9, 2);
     
     SpreadsheetApp.getUi().alert(`Refreshed ${rows.length} transactions.`);
   } catch (error) {
