@@ -2,6 +2,20 @@
 
 A Google Sheets add-on that connects your brokerage accounts to Google Sheets, enabling automated portfolio tracking, transaction history, and account balance monitoring directly in your spreadsheets.
 
+## Before You Begin: SnapTrade Account and API Credentials
+
+SnapTrade offers a free account that you can use to connect your brokerage accounts and access the API used by this add-on.
+
+Follow these steps to sign up and get your credentials:
+- Go to the [SnapTrade website](https://snaptrade.com) and create a free account.
+- After signing in, open the SnapTrade Dashboard.
+- Navigate to the developer/API section of the dashboard to create an application.
+- Copy your Client ID and Consumer Key from the dashboard — you will paste these into the add-on during setup.
+
+Notes:
+- You can start on the free tier; it’s sufficient for connecting brokerages and pulling account, holdings, and transactions data.
+- Keep your credentials secure. This add-on stores them in Google Apps Script properties, never in the sheet itself.
+
 ## What Does It Do?
 
 This integration allows you to:
