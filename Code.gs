@@ -277,7 +277,7 @@ function clearAllData() {
   PropertiesService.getUserProperties().deleteAllProperties();
 
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-  const targets = ['Accounts', 'Holdings', 'Balances', 'Transactions'];
+  const targets = ['Accounts', 'Holdings', 'Balances', 'Transactions', 'Account History'];
 
   targets.forEach((name) => {
     const sheet = spreadsheet.getSheetByName(name);
@@ -317,6 +317,32 @@ function isDebugMode() {
 function toggleDebugMode() {
   const currentMode = isDebugMode();
   setDebugMode(!currentMode);
+}
+
+/**
+ * Formats the header row of a sheet with styling.
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - The sheet to format
+ */
+function formatSheetHeader(sheet) {
+  const headerRange = sheet.getRange(1, 1, 1, sheet.getLastColumn());
+  
+  // Make header bold
+  headerRange.setFontWeight('bold');
+  
+  // Set background color (light blue)
+  headerRange.setBackground('#4A86E8');
+  
+  // Set text color (white)
+  headerRange.setFontColor('#FFFFFF');
+  
+  // Center align text
+  headerRange.setHorizontalAlignment('center');
+  
+  // Freeze header row
+  sheet.setFrozenRows(1);
+  
+  // Add borders
+  headerRange.setBorder(true, true, true, true, true, true);
 }
 
 /**
@@ -639,6 +665,12 @@ function refreshHoldings() {
 
     sheet.getRange(2, 5, Math.max(rows.length, 1), 4).setNumberFormat('$#,##0.00');
     
+    // Format header row
+    formatSheetHeader(sheet);
+    
+    // Auto-resize columns for better readability
+    sheet.autoResizeColumns(1, 9);
+    
     const message = `Refreshed ${rows.length} positions from ${accounts.length} accounts.`;
     if (debug) Logger.log(`[refreshHoldings] ${message}`);
     
@@ -685,6 +717,12 @@ function refreshBalances() {
       sheet.getRange(2, 3, rows.length, 3).setNumberFormat('$#,##0.00');
     }
     
+    // Format header row
+    formatSheetHeader(sheet);
+    
+    // Auto-resize columns for better readability
+    sheet.autoResizeColumns(1, 6);
+    
     SpreadsheetApp.getUi().alert(`Refreshed balances for ${accounts.length} accounts.`);
   } catch (error) {
     SpreadsheetApp.getUi().alert(`Error refreshing balances: ${error.message}`);
@@ -729,10 +767,63 @@ function refreshAccounts() {
       sheet.getRange(2, 2, rows.length, 1).setNumberFormat('$#,##0.00');
     }
     
+    // Format header row
+    formatSheetHeader(sheet);
+    
+    // Auto-resize columns for better readability
+    sheet.autoResizeColumns(1, 7);
+    
     SpreadsheetApp.getUi().alert(`Refreshed ${accounts.length} accounts.`);
   } catch (error) {
     SpreadsheetApp.getUi().alert(`Error refreshing accounts: ${error.message}`);
     Logger.log(`refreshAccounts error: ${error.message}`);
+  }
+}
+
+/**
+ * Tracks account values over time by appending current balances to a history sheet.
+ * Creates a time-series record of each account's net value.
+ */
+function trackAccountHistory() {
+  try {
+    const accounts = snapTradeRequest('GET', '/api/v1/accounts', {}, null);
+    const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = spreadsheet.getSheetByName('Account History') || spreadsheet.insertSheet('Account History');
+    
+    // Initialize sheet if empty
+    if (sheet.getLastRow() === 0) {
+      sheet.appendRow(['Timestamp', 'Account Name', 'Account ID', 'Balance', 'Currency', 'Institution']);
+      formatSheetHeader(sheet);
+    }
+    
+    const timestamp = new Date();
+    const rows = accounts.map((account) => [
+      timestamp,
+      account.name || account.number,
+      account.id || '',
+      (account.balance && account.balance.total && account.balance.total.amount) || 0,
+      (account.balance && account.balance.total && account.balance.total.currency) || '',
+      account.institution_name || '',
+    ]);
+    
+    if (rows.length > 0) {
+      sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
+      
+      // Format balance column as currency
+      const startRow = sheet.getLastRow() - rows.length + 1;
+      sheet.getRange(startRow, 4, rows.length, 1).setNumberFormat('$#,##0.00');
+      
+      // Format timestamp column
+      sheet.getRange(startRow, 1, rows.length, 1).setNumberFormat('yyyy-mm-dd hh:mm:ss');
+    }
+    
+    // Auto-resize columns
+    sheet.autoResizeColumns(1, 6);
+    
+    SpreadsheetApp.getUi().alert(`Tracked ${accounts.length} account values at ${timestamp.toLocaleString()}.`);
+  } catch (error) {
+    SpreadsheetApp.getUi().alert(`Error tracking account history: ${error.message}`);
+    Logger.log(`trackAccountHistory error: ${error.message}`);
   }
 }
 
@@ -779,6 +870,12 @@ function refreshTransactions(startDate, endDate) {
       sheet.getRange(2, 2, rows.length, 1).setNumberFormat('$#,##0.00');
     }
     
+    // Format header row
+    formatSheetHeader(sheet);
+    
+    // Auto-resize columns for better readability
+    sheet.autoResizeColumns(1, 7);
+    
     SpreadsheetApp.getUi().alert(`Refreshed ${rows.length} transactions.`);
   } catch (error) {
     SpreadsheetApp.getUi().alert(`Error refreshing transactions: ${error.message}`);
@@ -813,6 +910,8 @@ function onOpen(e) {
     .addItem('💰 Refresh Holdings', 'refreshHoldings')
     .addItem('💵 Refresh Balances', 'refreshBalances')
     .addItem('📜 Refresh Transactions', 'showTransactionDialog')
+    .addSeparator()
+    .addItem('📈 Track Account History', 'trackAccountHistory')
     .addSeparator()
     .addSubMenu(
       SpreadsheetApp.getUi()
