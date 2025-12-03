@@ -100,16 +100,16 @@ function testUpdateAccountHistoryOnce() {
       return;
     }
     
-    // Test 1: With pre-fetched balances (simulating refreshAccounts flow)
-    Logger.log('[TEST] Test 1: updateAccountHistoryOnce WITH pre-fetched balances');
+    // Test 1: With prefetched balances (simulating refreshAccounts flow)
+    Logger.log('[TEST] Test 1: updateAccountHistoryOnce WITH prefetched balances');
     const balancesMap = fetchAccountDataInParallel(accounts, 'balances');
     const startTime1 = new Date().getTime();
     updateAccountHistoryOnce(accounts, balancesMap);
     const time1 = new Date().getTime() - startTime1;
     Logger.log(`[TEST] Test 1 completed in ${time1}ms (should be fast - no API calls)`);
     
-    // Test 2: Without pre-fetched balances (simulating trackAccountHistory flow)
-    Logger.log('[TEST] Test 2: updateAccountHistoryOnce WITHOUT pre-fetched balances');
+    // Test 2: Without prefetched balances (simulating trackAccountHistory flow)
+    Logger.log('[TEST] Test 2: updateAccountHistoryOnce WITHOUT prefetched balances');
     const startTime2 = new Date().getTime();
     updateAccountHistoryOnce(accounts);
     const time2 = new Date().getTime() - startTime2;

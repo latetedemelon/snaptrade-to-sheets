@@ -844,7 +844,7 @@ function refreshAccounts() {
     // Hide Account ID and Raw Data columns by default
     sheet.hideColumns(7, 2);
     
-    // Automatically update account history (once per day) - pass the already-fetched balances
+    // Automatically update account history (once per day) - pass the already fetched balances
     updateAccountHistoryOnce(accounts, balancesMap);
     
     SpreadsheetApp.getUi().alert(`Refreshed ${rows.length} account balances from ${accounts.length} accounts.`);
@@ -917,7 +917,7 @@ function updateAccountHistoryOnce(accounts, balancesMap) {
   const rows = [];
   
   // Fetch balances for each account to match Accounts sheet data source
-  // Use pre-fetched balances if available, otherwise fetch them
+  // Use prefetched balances if available, otherwise fetch them
   const balances = balancesMap || fetchAccountDataInParallel(accounts, 'balances');
   
   accounts.forEach((account) => {

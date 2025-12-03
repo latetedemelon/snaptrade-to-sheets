@@ -44,7 +44,7 @@ The original implementation suffered from two main performance bottlenecks:
 
 **Changes**:
 - Added call to `fetchAccountDataInParallel(accounts, 'balances')` before the forEach loop
-- Changed from sequential `snapTradeRequest()` calls to reading from the pre-fetched `balancesMap`
+- Changed from sequential `snapTradeRequest()` calls to reading from the prefetched `balancesMap`
 - Passes the `balancesMap` to `updateAccountHistoryOnce()` to avoid duplicate API calls
 - Added null check for missing balances data with appropriate logging
 
@@ -57,7 +57,7 @@ The original implementation suffered from two main performance bottlenecks:
 
 **Changes**:
 - Added optional `balancesMap` parameter
-- Uses pre-fetched balances when available via `balancesMap || fetchAccountDataInParallel(accounts, 'balances')`
+- Uses prefetched balances when available via `balancesMap || fetchAccountDataInParallel(accounts, 'balances')`
 - Maintains backwards compatibility (when called without balancesMap, it fetches the data itself)
 - Added null check for missing account balances with appropriate logging
 
