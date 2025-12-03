@@ -783,31 +783,30 @@ function refreshHoldings() {
     if (rows.length > 0) {
       sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
       
-      // Add formulas for CAD conversion
+      // Add formulas for CAD conversion using R1C1 notation for batch operations
       // Column M is Currency (col 13), E is Price (col 5), G is Market Value (col 7), I is Cost Basis (col 9), K is Gain/Loss (col 11)
+      
+      // Build formula arrays for batch insertion
+      const priceCADFormulas = [];
+      const marketValueCADFormulas = [];
+      const costBasisCADFormulas = [];
+      const gainLossCADFormulas = [];
+      
       for (let i = 0; i < rows.length; i++) {
         const rowNum = i + 2; // Data starts at row 2
         
-        // Price (CAD) - Column F
-        sheet.getRange(rowNum, 6).setFormula(
-          `=IF(M${rowNum}="CAD", E${rowNum}, IF(M${rowNum}="", E${rowNum}, E${rowNum} * GOOGLEFINANCE("CURRENCY:" & M${rowNum} & "CAD")))`
-        );
-        
-        // Market Value (CAD) - Column H
-        sheet.getRange(rowNum, 8).setFormula(
-          `=IF(M${rowNum}="CAD", G${rowNum}, IF(M${rowNum}="", G${rowNum}, G${rowNum} * GOOGLEFINANCE("CURRENCY:" & M${rowNum} & "CAD")))`
-        );
-        
-        // Cost Basis (CAD) - Column J
-        sheet.getRange(rowNum, 10).setFormula(
-          `=IF(M${rowNum}="CAD", I${rowNum}, IF(M${rowNum}="", I${rowNum}, I${rowNum} * GOOGLEFINANCE("CURRENCY:" & M${rowNum} & "CAD")))`
-        );
-        
-        // Gain/Loss (CAD) - Column L
-        sheet.getRange(rowNum, 12).setFormula(
-          `=IF(M${rowNum}="CAD", K${rowNum}, IF(M${rowNum}="", K${rowNum}, K${rowNum} * GOOGLEFINANCE("CURRENCY:" & M${rowNum} & "CAD")))`
-        );
+        // Using R1C1 notation: RC[x] means same row, column offset by x
+        priceCADFormulas.push([`=IF(RC[7]="CAD", RC[-1], IF(RC[7]="", RC[-1], RC[-1] * GOOGLEFINANCE("CURRENCY:" & RC[7] & "CAD")))`]);
+        marketValueCADFormulas.push([`=IF(RC[5]="CAD", RC[-1], IF(RC[5]="", RC[-1], RC[-1] * GOOGLEFINANCE("CURRENCY:" & RC[5] & "CAD")))`]);
+        costBasisCADFormulas.push([`=IF(RC[3]="CAD", RC[-1], IF(RC[3]="", RC[-1], RC[-1] * GOOGLEFINANCE("CURRENCY:" & RC[3] & "CAD")))`]);
+        gainLossCADFormulas.push([`=IF(RC[1]="CAD", RC[-1], IF(RC[1]="", RC[-1], RC[-1] * GOOGLEFINANCE("CURRENCY:" & RC[1] & "CAD")))`]);
       }
+      
+      // Set all formulas at once
+      sheet.getRange(2, 6, rows.length, 1).setFormulasR1C1(priceCADFormulas);
+      sheet.getRange(2, 8, rows.length, 1).setFormulasR1C1(marketValueCADFormulas);
+      sheet.getRange(2, 10, rows.length, 1).setFormulasR1C1(costBasisCADFormulas);
+      sheet.getRange(2, 12, rows.length, 1).setFormulasR1C1(gainLossCADFormulas);
     }
 
     // Format price and value columns as currency
@@ -897,16 +896,17 @@ function refreshAccounts() {
     if (rows.length > 0) {
       sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
       
-      // Add formulas for CAD conversion
+      // Add formulas for CAD conversion using R1C1 notation for batch operations
       // Column D is Currency (col 4), B is Balance (col 2)
+      const balanceCADFormulas = [];
+      
       for (let i = 0; i < rows.length; i++) {
-        const rowNum = i + 2; // Data starts at row 2
-        
-        // Balance (CAD) - Column C
-        sheet.getRange(rowNum, 3).setFormula(
-          `=IF(D${rowNum}="CAD", B${rowNum}, IF(D${rowNum}="", B${rowNum}, B${rowNum} * GOOGLEFINANCE("CURRENCY:" & D${rowNum} & "CAD")))`
-        );
+        // Using R1C1 notation: RC[x] means same row, column offset by x
+        balanceCADFormulas.push([`=IF(RC[1]="CAD", RC[-1], IF(RC[1]="", RC[-1], RC[-1] * GOOGLEFINANCE("CURRENCY:" & RC[1] & "CAD")))`]);
       }
+      
+      // Set all formulas at once
+      sheet.getRange(2, 3, rows.length, 1).setFormulasR1C1(balanceCADFormulas);
       
       // Format balance columns as currency
       sheet.getRange(2, 2, rows.length, 1).setNumberFormat('$#,##0.00'); // Balance
@@ -1034,16 +1034,17 @@ function updateAccountHistoryOnce(accounts, balancesMap) {
     
     sheet.getRange(startRow, 1, rows.length, rows[0].length).setValues(rows);
     
-    // Add formulas for CAD conversion
+    // Add formulas for CAD conversion using R1C1 notation for batch operations
     // Column F is Currency (col 6), D is Balance (col 4)
+    const balanceCADFormulas = [];
+    
     for (let i = 0; i < rows.length; i++) {
-      const rowNum = startRow + i;
-      
-      // Balance (CAD) - Column E
-      sheet.getRange(rowNum, 5).setFormula(
-        `=IF(F${rowNum}="CAD", D${rowNum}, IF(F${rowNum}="", D${rowNum}, D${rowNum} * GOOGLEFINANCE("CURRENCY:" & F${rowNum} & "CAD")))`
-      );
+      // Using R1C1 notation: RC[x] means same row, column offset by x
+      balanceCADFormulas.push([`=IF(RC[1]="CAD", RC[-1], IF(RC[1]="", RC[-1], RC[-1] * GOOGLEFINANCE("CURRENCY:" & RC[1] & "CAD")))`]);
     }
+    
+    // Set all formulas at once
+    sheet.getRange(startRow, 5, rows.length, 1).setFormulasR1C1(balanceCADFormulas);
     
     // Format balance columns as currency
     sheet.getRange(startRow, 4, rows.length, 1).setNumberFormat('$#,##0.00'); // Balance
@@ -1102,16 +1103,17 @@ function refreshTransactions(startDate, endDate) {
     if (rows.length > 0) {
       sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
       
-      // Add formulas for CAD conversion
+      // Add formulas for CAD conversion using R1C1 notation for batch operations
       // Column D is Currency (col 4), B is Amount (col 2)
+      const amountCADFormulas = [];
+      
       for (let i = 0; i < rows.length; i++) {
-        const rowNum = i + 2; // Data starts at row 2
-        
-        // Amount (CAD) - Column C
-        sheet.getRange(rowNum, 3).setFormula(
-          `=IF(D${rowNum}="CAD", B${rowNum}, IF(D${rowNum}="", B${rowNum}, B${rowNum} * GOOGLEFINANCE("CURRENCY:" & D${rowNum} & "CAD")))`
-        );
+        // Using R1C1 notation: RC[x] means same row, column offset by x
+        amountCADFormulas.push([`=IF(RC[1]="CAD", RC[-1], IF(RC[1]="", RC[-1], RC[-1] * GOOGLEFINANCE("CURRENCY:" & RC[1] & "CAD")))`]);
       }
+      
+      // Set all formulas at once
+      sheet.getRange(2, 3, rows.length, 1).setFormulasR1C1(amountCADFormulas);
       
       // Format amount columns as currency
       sheet.getRange(2, 2, rows.length, 1).setNumberFormat('$#,##0.00'); // Amount
