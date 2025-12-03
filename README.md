@@ -2,6 +2,16 @@
 
 A Google Sheets add-on that connects your brokerage accounts to Google Sheets, enabling automated portfolio tracking, transaction history, and account balance monitoring directly in your spreadsheets.
 
+## What Does It Do?
+
+This integration allows you to:
+- **Connect multiple brokerage accounts** from 20+ brokerages (Robinhood, Schwab, Fidelity, E*TRADE, Interactive Brokers, and more)
+- **Track your portfolio** with real-time holdings, balances, and account summaries
+- **Monitor transactions** with detailed transaction history and categorization
+- **Automate data refresh** directly from Google Sheets menus
+
+All data is fetched securely using the SnapTrade API with HMAC-SHA256 authentication, and your credentials are stored safely in Google Apps Script properties.
+
 ## Before You Begin: SnapTrade Account and API Credentials
 
 SnapTrade offers a free account that you can use to connect your brokerage accounts and access the API used by this add-on.
@@ -14,17 +24,6 @@ Follow these steps to sign up and get your credentials:
 
 Notes:
 - You can start on the free tier; it’s sufficient for connecting brokerages and pulling account, holdings, and transactions data.
-- Keep your credentials secure. This add-on stores them in Google Apps Script properties, never in the sheet itself.
-
-## What Does It Do?
-
-This integration allows you to:
-- **Connect multiple brokerage accounts** from 20+ brokerages (Robinhood, Schwab, Fidelity, E*TRADE, Interactive Brokers, and more)
-- **Track your portfolio** with real-time holdings, balances, and account summaries
-- **Monitor transactions** with detailed transaction history and categorization
-- **Automate data refresh** directly from Google Sheets menus
-
-All data is fetched securely using the SnapTrade API with HMAC-SHA256 authentication, and your credentials are stored safely in Google Apps Script properties.
 
 ## Quick Start
 
