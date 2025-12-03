@@ -277,7 +277,7 @@ function clearAllData() {
   PropertiesService.getUserProperties().deleteAllProperties();
 
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-  const targets = ['Holdings', 'Balances', 'Transactions'];
+  const targets = ['Accounts', 'Holdings', 'Transactions', 'Account History'];
 
   targets.forEach((name) => {
     const sheet = spreadsheet.getSheetByName(name);
@@ -317,6 +317,39 @@ function isDebugMode() {
 function toggleDebugMode() {
   const currentMode = isDebugMode();
   setDebugMode(!currentMode);
+}
+
+/**
+ * Formats the header row of a sheet with styling.
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - The sheet to format
+ */
+function formatSheetHeader(sheet) {
+  const lastColumn = sheet.getLastColumn();
+  
+  // Guard against empty sheets
+  if (lastColumn === 0) {
+    return;
+  }
+  
+  const headerRange = sheet.getRange(1, 1, 1, lastColumn);
+  
+  // Make header bold
+  headerRange.setFontWeight('bold');
+  
+  // Set background color (light blue)
+  headerRange.setBackground('#4A86E8');
+  
+  // Set text color (white)
+  headerRange.setFontColor('#FFFFFF');
+  
+  // Center align text
+  headerRange.setHorizontalAlignment('center');
+  
+  // Freeze header row
+  sheet.setFrozenRows(1);
+  
+  // Add borders
+  headerRange.setBorder(true, true, true, true, true, true);
 }
 
 /**
@@ -639,6 +672,12 @@ function refreshHoldings() {
 
     sheet.getRange(2, 5, Math.max(rows.length, 1), 4).setNumberFormat('$#,##0.00');
     
+    // Format header row
+    formatSheetHeader(sheet);
+    
+    // Auto-resize columns for better readability
+    sheet.autoResizeColumns(1, 9);
+    
     const message = `Refreshed ${rows.length} positions from ${accounts.length} accounts.`;
     if (debug) Logger.log(`[refreshHoldings] ${message}`);
     
@@ -652,44 +691,172 @@ function refreshHoldings() {
 }
 
 /**
- * Creates a balances summary sheet.
+ * Creates an accounts summary sheet with separate rows for each currency balance.
+ * Automatically updates account history (once per day).
  */
-function refreshBalances() {
+function refreshAccounts() {
   try {
     const accounts = snapTradeRequest('GET', '/api/v1/accounts', {}, null);
     const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-    const sheet = spreadsheet.getSheetByName('Balances') || spreadsheet.insertSheet('Balances');
+    const sheet = spreadsheet.getSheetByName('Accounts') || spreadsheet.insertSheet('Accounts');
 
     sheet.clear();
-    sheet.appendRow(['Account', 'Institution', 'Cash', 'Buying Power', 'Total Value', 'Currency']);
+    sheet.appendRow([
+      'Account Name',
+      'Balance',
+      'Currency',
+      'Notes',
+      'Last Update',
+      'Institution',
+      'Account ID',
+      'Raw Data',
+    ]);
 
     const rows = [];
-
+    
+    // Fetch balances for each account to show separate rows per currency
     accounts.forEach((account) => {
       const balances = snapTradeRequest('GET', `/api/v1/accounts/${account.id}/balances`, {}, null);
-
+      
       balances.forEach((bal) => {
         rows.push([
           account.name || account.number,
-          account.institution_name || '',
           bal.cash || 0,
-          bal.buying_power || 0,
-          (account.balance && account.balance.total && account.balance.total.amount) || 0,
-          (bal.currency && bal.currency.code) || 'USD',
+          (bal.currency && bal.currency.code) || '',
+          '',
+          (account.sync_status && account.sync_status.holdings && account.sync_status.holdings.last_successful_sync) || '',
+          account.institution_name || '',
+          account.id || '',
+          JSON.stringify(account),
         ]);
       });
     });
 
     if (rows.length > 0) {
       sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
-      sheet.getRange(2, 3, rows.length, 3).setNumberFormat('$#,##0.00');
+      sheet.getRange(2, 2, rows.length, 1).setNumberFormat('$#,##0.00');
     }
     
-    SpreadsheetApp.getUi().alert(`Refreshed balances for ${accounts.length} accounts.`);
+    // Format header row
+    formatSheetHeader(sheet);
+    
+    // Auto-resize columns for better readability (excluding Raw Data column which can be very wide)
+    sheet.autoResizeColumns(1, 7);
+    
+    // Hide Account ID and Raw Data columns by default
+    sheet.hideColumns(7, 2);
+    
+    // Automatically update account history (once per day)
+    updateAccountHistoryOnce(accounts);
+    
+    SpreadsheetApp.getUi().alert(`Refreshed ${rows.length} account balances from ${accounts.length} accounts.`);
   } catch (error) {
-    SpreadsheetApp.getUi().alert(`Error refreshing balances: ${error.message}`);
-    Logger.log(`refreshBalances error: ${error.message}`);
+    SpreadsheetApp.getUi().alert(`Error refreshing accounts: ${error.message}`);
+    Logger.log(`refreshAccounts error: ${error.message}`);
   }
+}
+
+/**
+ * Tracks account values over time by appending current balances to a history sheet.
+ * Creates a time-series record of each account's net value.
+ */
+function trackAccountHistory() {
+  try {
+    const accounts = snapTradeRequest('GET', '/api/v1/accounts', {}, null);
+    updateAccountHistoryOnce(accounts);
+    
+    const timestamp = new Date();
+    SpreadsheetApp.getUi().alert(`Tracked ${accounts.length} account values at ${timestamp.toLocaleString()}.`);
+  } catch (error) {
+    SpreadsheetApp.getUi().alert(`Error tracking account history: ${error.message}`);
+    Logger.log(`trackAccountHistory error: ${error.message}`);
+  }
+}
+
+/**
+ * Updates account history, but only once per day. If called multiple times in the same day,
+ * updates existing rows instead of creating new ones.
+ * @param {Array} accounts - Array of account objects from SnapTrade API
+ */
+function updateAccountHistoryOnce(accounts) {
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = spreadsheet.getSheetByName('Account History') || spreadsheet.insertSheet('Account History');
+  
+  // Initialize sheet if empty
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(['Timestamp', 'Account Name', 'Account ID', 'Balance', 'Currency', 'Institution']);
+    formatSheetHeader(sheet);
+  }
+  
+  const today = new Date();
+  today.setHours(0, 0, 0, 0); // Normalize to start of day
+  const todayStr = Utilities.formatDate(today, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  
+  // Check if we already have entries for today
+  let todayStartRow = -1;
+  let todayEndRow = -1;
+  
+  // Only check for existing entries if sheet has data beyond header
+  if (sheet.getLastRow() > 1) {
+    const data = sheet.getDataRange().getValues();
+    
+    for (let i = 1; i < data.length; i++) { // Start from 1 to skip header
+      const rowDate = new Date(data[i][0]);
+      rowDate.setHours(0, 0, 0, 0);
+      const rowDateStr = Utilities.formatDate(rowDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+      
+      if (rowDateStr === todayStr) {
+        if (todayStartRow === -1) {
+          todayStartRow = i + 1; // +1 because array is 0-indexed but rows are 1-indexed
+        }
+        todayEndRow = i + 1;
+      }
+    }
+  }
+  
+  const timestamp = new Date();
+  const rows = [];
+  
+  // Fetch balances for each account to match Accounts sheet data source
+  accounts.forEach((account) => {
+    const balances = snapTradeRequest('GET', `/api/v1/accounts/${account.id}/balances`, {}, null);
+    
+    balances.forEach((bal) => {
+      rows.push([
+        timestamp,
+        account.name || account.number,
+        account.id || '',
+        bal.cash || 0,
+        (bal.currency && bal.currency.code) || '',
+        account.institution_name || '',
+      ]);
+    });
+  });
+  
+  if (rows.length > 0) {
+    let startRow;
+    
+    if (todayStartRow !== -1) {
+      // Update existing rows for today
+      startRow = todayStartRow;
+      // Delete old rows for today first
+      sheet.deleteRows(todayStartRow, todayEndRow - todayStartRow + 1);
+    } else {
+      // Append new rows
+      startRow = sheet.getLastRow() + 1;
+    }
+    
+    sheet.getRange(startRow, 1, rows.length, rows[0].length).setValues(rows);
+    
+    // Format balance column as currency
+    sheet.getRange(startRow, 4, rows.length, 1).setNumberFormat('$#,##0.00');
+    
+    // Format timestamp column to show only date
+    sheet.getRange(startRow, 1, rows.length, 1).setNumberFormat('yyyy-mm-dd');
+  }
+  
+  // Auto-resize columns (6 columns: Timestamp, Account Name, Account ID, Balance, Currency, Institution)
+  sheet.autoResizeColumns(1, 6);
 }
 
 /**
@@ -710,34 +877,39 @@ function refreshTransactions(startDate, endDate) {
     sheet.clear();
     sheet.appendRow([
       'Date',
-      'Account',
-      'Type',
-      'Symbol',
-      'Description',
-      'Quantity',
-      'Price',
       'Amount',
-      'Fee',
-      'Currency',
+      'Description',
+      'Category',
+      'Account',
+      'Attachment',
+      'Transaction ID',
+      'Raw Data',
     ]);
 
     const rows = transactions.map((tx) => [
       tx.trade_date || tx.settlement_date,
-      (tx.account && (tx.account.name || tx.account.number)) || '',
-      tx.type,
-      (tx.symbol && tx.symbol.symbol) || '',
-      tx.description || '',
-      tx.units || '',
-      tx.price || '',
       tx.amount || 0,
-      tx.fee || 0,
-      (tx.currency && tx.currency.code) || 'USD',
+      tx.description || '',
+      tx.type,
+      (tx.account && (tx.account.name || tx.account.number)) || '',
+      '',
+      tx.id || '',
+      JSON.stringify(tx),
     ]);
 
     if (rows.length > 0) {
       sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
-      sheet.getRange(2, 8, rows.length, 2).setNumberFormat('$#,##0.00');
+      sheet.getRange(2, 2, rows.length, 1).setNumberFormat('$#,##0.00');
     }
+    
+    // Format header row
+    formatSheetHeader(sheet);
+    
+    // Auto-resize columns for better readability (excluding Raw Data column which can be very wide)
+    sheet.autoResizeColumns(1, 6);
+    
+    // Hide Transaction ID and Raw Data columns by default
+    sheet.hideColumns(7, 2);
     
     SpreadsheetApp.getUi().alert(`Refreshed ${rows.length} transactions.`);
   } catch (error) {
@@ -769,9 +941,11 @@ function onOpen(e) {
     .addItem('🔗 Connect Brokerage', 'showConnectBrokerageDialog')
     .addItem('📋 View Connected Accounts', 'showAccountsSidebar')
     .addSeparator()
+    .addItem('📊 Refresh Accounts', 'refreshAccounts')
     .addItem('💰 Refresh Holdings', 'refreshHoldings')
-    .addItem('💵 Refresh Balances', 'refreshBalances')
     .addItem('📜 Refresh Transactions', 'showTransactionDialog')
+    .addSeparator()
+    .addItem('📈 Track Account History', 'trackAccountHistory')
     .addSeparator()
     .addSubMenu(
       SpreadsheetApp.getUi()
