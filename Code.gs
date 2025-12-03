@@ -277,7 +277,7 @@ function clearAllData() {
   PropertiesService.getUserProperties().deleteAllProperties();
 
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-  const targets = ['Accounts', 'Holdings', 'Balances', 'Transactions', 'Account History'];
+  const targets = ['Accounts', 'Holdings', 'Transactions', 'Account History'];
 
   targets.forEach((name) => {
     const sheet = spreadsheet.getSheetByName(name);
@@ -691,54 +691,8 @@ function refreshHoldings() {
 }
 
 /**
- * Creates a balances summary sheet.
- */
-function refreshBalances() {
-  try {
-    const accounts = snapTradeRequest('GET', '/api/v1/accounts', {}, null);
-    const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-    const sheet = spreadsheet.getSheetByName('Balances') || spreadsheet.insertSheet('Balances');
-
-    sheet.clear();
-    sheet.appendRow(['Account', 'Institution', 'Cash', 'Buying Power', 'Total Value', 'Currency']);
-
-    const rows = [];
-
-    accounts.forEach((account) => {
-      const balances = snapTradeRequest('GET', `/api/v1/accounts/${account.id}/balances`, {}, null);
-
-      balances.forEach((bal) => {
-        rows.push([
-          account.name || account.number,
-          account.institution_name || '',
-          bal.cash || 0,
-          bal.buying_power || 0,
-          (account.balance && account.balance.total && account.balance.total.amount) || 0,
-          (bal.currency && bal.currency.code) || 'USD',
-        ]);
-      });
-    });
-
-    if (rows.length > 0) {
-      sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
-      sheet.getRange(2, 3, rows.length, 3).setNumberFormat('$#,##0.00');
-    }
-    
-    // Format header row
-    formatSheetHeader(sheet);
-    
-    // Auto-resize columns for better readability
-    sheet.autoResizeColumns(1, 6);
-    
-    SpreadsheetApp.getUi().alert(`Refreshed balances for ${accounts.length} accounts.`);
-  } catch (error) {
-    SpreadsheetApp.getUi().alert(`Error refreshing balances: ${error.message}`);
-    Logger.log(`refreshBalances error: ${error.message}`);
-  }
-}
-
-/**
- * Creates an accounts summary sheet.
+ * Creates an accounts summary sheet with separate rows for each currency balance.
+ * Automatically updates account history (once per day).
  */
 function refreshAccounts() {
   try {
@@ -758,16 +712,25 @@ function refreshAccounts() {
       'Raw Data',
     ]);
 
-    const rows = accounts.map((account) => [
-      account.name || account.number,
-      (account.balance && account.balance.total && account.balance.total.amount) || 0,
-      (account.balance && account.balance.total && account.balance.total.currency) || '',
-      '',
-      (account.sync_status && account.sync_status.holdings && account.sync_status.holdings.last_successful_sync) || '',
-      account.institution_name || '',
-      account.id || '',
-      JSON.stringify(account),
-    ]);
+    const rows = [];
+    
+    // Fetch balances for each account to show separate rows per currency
+    accounts.forEach((account) => {
+      const balances = snapTradeRequest('GET', `/api/v1/accounts/${account.id}/balances`, {}, null);
+      
+      balances.forEach((bal) => {
+        rows.push([
+          account.name || account.number,
+          bal.cash || (account.balance && account.balance.total && account.balance.total.amount) || 0,
+          (bal.currency && bal.currency.code) || (account.balance && account.balance.total && account.balance.total.currency) || '',
+          '',
+          (account.sync_status && account.sync_status.holdings && account.sync_status.holdings.last_successful_sync) || '',
+          account.institution_name || '',
+          account.id || '',
+          JSON.stringify(account),
+        ]);
+      });
+    });
 
     if (rows.length > 0) {
       sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
@@ -780,7 +743,13 @@ function refreshAccounts() {
     // Auto-resize columns for better readability (excluding Raw Data column which can be very wide)
     sheet.autoResizeColumns(1, 7);
     
-    SpreadsheetApp.getUi().alert(`Refreshed ${accounts.length} accounts.`);
+    // Hide Account ID and Raw Data columns by default
+    sheet.hideColumns(7, 2);
+    
+    // Automatically update account history (once per day)
+    updateAccountHistoryOnce(accounts);
+    
+    SpreadsheetApp.getUi().alert(`Refreshed ${rows.length} account balances from ${accounts.length} accounts.`);
   } catch (error) {
     SpreadsheetApp.getUi().alert(`Error refreshing accounts: ${error.message}`);
     Logger.log(`refreshAccounts error: ${error.message}`);
@@ -794,44 +763,89 @@ function refreshAccounts() {
 function trackAccountHistory() {
   try {
     const accounts = snapTradeRequest('GET', '/api/v1/accounts', {}, null);
-    const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-    const sheet = spreadsheet.getSheetByName('Account History') || spreadsheet.insertSheet('Account History');
-    
-    // Initialize sheet if empty
-    if (sheet.getLastRow() === 0) {
-      sheet.appendRow(['Timestamp', 'Account Name', 'Account ID', 'Balance', 'Currency', 'Institution']);
-      formatSheetHeader(sheet);
-    }
+    updateAccountHistoryOnce(accounts);
     
     const timestamp = new Date();
-    const rows = accounts.map((account) => [
-      timestamp,
-      account.name || account.number,
-      account.id || '',
-      (account.balance && account.balance.total && account.balance.total.amount) || 0,
-      (account.balance && account.balance.total && account.balance.total.currency) || '',
-      account.institution_name || '',
-    ]);
-    
-    if (rows.length > 0) {
-      const startRow = sheet.getLastRow() + 1;
-      sheet.getRange(startRow, 1, rows.length, rows[0].length).setValues(rows);
-      
-      // Format balance column as currency
-      sheet.getRange(startRow, 4, rows.length, 1).setNumberFormat('$#,##0.00');
-      
-      // Format timestamp column
-      sheet.getRange(startRow, 1, rows.length, 1).setNumberFormat('yyyy-mm-dd hh:mm:ss');
-    }
-    
-    // Auto-resize columns
-    sheet.autoResizeColumns(1, 6);
-    
     SpreadsheetApp.getUi().alert(`Tracked ${accounts.length} account values at ${timestamp.toLocaleString()}.`);
   } catch (error) {
     SpreadsheetApp.getUi().alert(`Error tracking account history: ${error.message}`);
     Logger.log(`trackAccountHistory error: ${error.message}`);
   }
+}
+
+/**
+ * Updates account history, but only once per day. If called multiple times in the same day,
+ * updates existing rows instead of creating new ones.
+ * @param {Array} accounts - Array of account objects from SnapTrade API
+ */
+function updateAccountHistoryOnce(accounts) {
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = spreadsheet.getSheetByName('Account History') || spreadsheet.insertSheet('Account History');
+  
+  // Initialize sheet if empty
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(['Timestamp', 'Account Name', 'Account ID', 'Balance', 'Currency', 'Institution']);
+    formatSheetHeader(sheet);
+  }
+  
+  const today = new Date();
+  today.setHours(0, 0, 0, 0); // Normalize to start of day
+  const todayStr = Utilities.formatDate(today, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  
+  // Check if we already have entries for today
+  const data = sheet.getDataRange().getValues();
+  let todayStartRow = -1;
+  let todayEndRow = -1;
+  
+  for (let i = 1; i < data.length; i++) { // Start from 1 to skip header
+    const rowDate = new Date(data[i][0]);
+    rowDate.setHours(0, 0, 0, 0);
+    const rowDateStr = Utilities.formatDate(rowDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    
+    if (rowDateStr === todayStr) {
+      if (todayStartRow === -1) {
+        todayStartRow = i + 1; // +1 because array is 0-indexed but rows are 1-indexed
+      }
+      todayEndRow = i + 1;
+    }
+  }
+  
+  const timestamp = new Date();
+  const rows = accounts.map((account) => [
+    timestamp,
+    account.name || account.number,
+    account.id || '',
+    (account.balance && account.balance.total && account.balance.total.amount) || 0,
+    (account.balance && account.balance.total && account.balance.total.currency) || '',
+    account.institution_name || '',
+  ]);
+  
+  if (rows.length > 0) {
+    let startRow;
+    
+    if (todayStartRow !== -1) {
+      // Update existing rows for today
+      startRow = todayStartRow;
+      // Delete old rows for today first
+      if (todayEndRow - todayStartRow + 1 > 0) {
+        sheet.deleteRows(todayStartRow, todayEndRow - todayStartRow + 1);
+      }
+    } else {
+      // Append new rows
+      startRow = sheet.getLastRow() + 1;
+    }
+    
+    sheet.getRange(startRow, 1, rows.length, rows[0].length).setValues(rows);
+    
+    // Format balance column as currency
+    sheet.getRange(startRow, 4, rows.length, 1).setNumberFormat('$#,##0.00');
+    
+    // Format timestamp column to show only date
+    sheet.getRange(startRow, 1, rows.length, 1).setNumberFormat('yyyy-mm-dd');
+  }
+  
+  // Auto-resize columns
+  sheet.autoResizeColumns(1, 6);
 }
 
 /**
@@ -881,7 +895,10 @@ function refreshTransactions(startDate, endDate) {
     formatSheetHeader(sheet);
     
     // Auto-resize columns for better readability (excluding Raw Data column which can be very wide)
-    sheet.autoResizeColumns(1, 7);
+    sheet.autoResizeColumns(1, 6);
+    
+    // Hide Transaction ID and Raw Data columns by default
+    sheet.hideColumns(7, 2);
     
     SpreadsheetApp.getUi().alert(`Refreshed ${rows.length} transactions.`);
   } catch (error) {
@@ -915,7 +932,6 @@ function onOpen(e) {
     .addSeparator()
     .addItem('📊 Refresh Accounts', 'refreshAccounts')
     .addItem('💰 Refresh Holdings', 'refreshHoldings')
-    .addItem('💵 Refresh Balances', 'refreshBalances')
     .addItem('📜 Refresh Transactions', 'showTransactionDialog')
     .addSeparator()
     .addItem('📈 Track Account History', 'trackAccountHistory')
