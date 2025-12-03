@@ -236,15 +236,17 @@ function runAllValidationTests() {
   Logger.log('========================================');
   
   // Log summary of results instead of full JSON to keep logs readable
-  if (results.performance) {
-    Logger.log(`Performance test: ${results.performance.improvement}% faster with ${results.performance.accountCount} accounts`);
-  }
-  if (results.historyUpdate) {
-    Logger.log(`History update test: ${results.historyUpdate.difference}ms difference between with/without prefetch`);
-  }
-  if (results.parallelFetch) {
-    Logger.log(`Parallel fetch test: ${results.parallelFetch.accountCount} accounts processed successfully`);
-  }
+  const summaries = [
+    { test: 'Performance', data: results.performance, format: r => `${r.improvement}% faster with ${r.accountCount} accounts` },
+    { test: 'History update', data: results.historyUpdate, format: r => `${r.difference}ms difference between with/without prefetch` },
+    { test: 'Parallel fetch', data: results.parallelFetch, format: r => `${r.accountCount} accounts processed successfully` }
+  ];
+  
+  summaries.forEach(({ test, data, format }) => {
+    if (data) {
+      Logger.log(`${test} test: ${format(data)}`);
+    }
+  });
   
   return results;
 }
