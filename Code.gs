@@ -324,7 +324,14 @@ function toggleDebugMode() {
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - The sheet to format
  */
 function formatSheetHeader(sheet) {
-  const headerRange = sheet.getRange(1, 1, 1, sheet.getLastColumn());
+  const lastColumn = sheet.getLastColumn();
+  
+  // Guard against empty sheets
+  if (lastColumn === 0) {
+    return;
+  }
+  
+  const headerRange = sheet.getRange(1, 1, 1, lastColumn);
   
   // Make header bold
   headerRange.setFontWeight('bold');
