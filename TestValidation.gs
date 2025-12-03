@@ -135,7 +135,7 @@ function testUpdateAccountHistoryOnce() {
  * Compares performance of sequential vs parallel API calls.
  * This test measures the actual performance improvement.
  * Note: This test intentionally makes sequential API calls which may hit rate limits.
- * Use with caution on accounts with many brokerages.
+ * Automatically limits to first 5 accounts to prevent rate limiting issues.
  */
 function compareSequentialVsParallel() {
   try {
@@ -149,11 +149,15 @@ function compareSequentialVsParallel() {
       return;
     }
     
+    // Limit to first 5 accounts to prevent rate limiting
+    const testAccounts = accounts.slice(0, Math.min(5, accounts.length));
+    Logger.log(`[TEST] Testing with ${testAccounts.length} accounts (limited to 5 max)`);
+    
     // Sequential approach (old method)
     Logger.log('[TEST] Testing SEQUENTIAL approach...');
     const sequentialStart = new Date().getTime();
     const sequentialBalances = [];
-    accounts.forEach((account) => {
+    testAccounts.forEach((account) => {
       const balances = snapTradeRequest('GET', `/api/v1/accounts/${account.id}/balances`, {}, null);
       sequentialBalances.push({ accountId: account.id, balances: balances });
     });
@@ -163,7 +167,7 @@ function compareSequentialVsParallel() {
     // Parallel approach (new method)
     Logger.log('[TEST] Testing PARALLEL approach...');
     const parallelStart = new Date().getTime();
-    const parallelBalances = fetchAccountDataInParallel(accounts, 'balances');
+    const parallelBalances = fetchAccountDataInParallel(testAccounts, 'balances');
     const parallelTime = new Date().getTime() - parallelStart;
     Logger.log(`[TEST] Parallel approach completed in ${parallelTime}ms`);
     
@@ -173,7 +177,7 @@ function compareSequentialVsParallel() {
     
     Logger.log('[TEST] ========================================');
     Logger.log(`[TEST] Performance Results:`);
-    Logger.log(`[TEST] Accounts tested: ${accounts.length}`);
+    Logger.log(`[TEST] Accounts tested: ${testAccounts.length}`);
     Logger.log(`[TEST] Sequential time: ${sequentialTime}ms`);
     Logger.log(`[TEST] Parallel time: ${parallelTime}ms`);
     Logger.log(`[TEST] Improvement: ${improvement}% faster`);
@@ -181,7 +185,7 @@ function compareSequentialVsParallel() {
     Logger.log('[TEST] ========================================');
     
     return {
-      accountCount: accounts.length,
+      accountCount: testAccounts.length,
       sequentialTime: sequentialTime,
       parallelTime: parallelTime,
       improvement: improvement,
@@ -230,7 +234,17 @@ function runAllValidationTests() {
   Logger.log('========================================');
   Logger.log('All tests completed!');
   Logger.log('========================================');
-  Logger.log(JSON.stringify(results, null, 2));
+  
+  // Log summary of results instead of full JSON to keep logs readable
+  if (results.performance) {
+    Logger.log(`Performance test: ${results.performance.improvement}% faster with ${results.performance.accountCount} accounts`);
+  }
+  if (results.historyUpdate) {
+    Logger.log(`History update test: ${results.historyUpdate.difference}ms difference between with/without prefetch`);
+  }
+  if (results.parallelFetch) {
+    Logger.log(`Parallel fetch test: ${results.parallelFetch.accountCount} accounts processed successfully`);
+  }
   
   return results;
 }

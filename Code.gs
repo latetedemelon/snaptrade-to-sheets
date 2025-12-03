@@ -137,6 +137,9 @@ function snapTradeRequestWithRetry(method, path, params, body, maxRetries) {
  * Fetches data from multiple accounts in parallel using UrlFetchApp.fetchAll().
  * Note: For very large account sets (50+), consider implementing batch processing
  * to avoid API rate limits or Google Apps Script execution limits.
+ * Google Apps Script has a 6-minute execution limit and UrlFetchApp.fetchAll()
+ * has a maximum of 100 requests per batch. For 50+ accounts, consider splitting
+ * into batches of 50 requests each.
  * @param {Array} accounts - Array of account objects from SnapTrade API
  * @param {string} endpointSuffix - Endpoint suffix (e.g., 'holdings', 'balances')
  * @returns {Object} Map of accountId to response data
@@ -153,6 +156,11 @@ function fetchAccountDataInParallel(accounts, endpointSuffix) {
   }
   
   const context = getSnapTradeContext();
+  // Generate timestamp once and reuse for all requests in this batch.
+  // This is safe because each request has a unique path (different account IDs),
+  // which creates unique signatures even with the same timestamp.
+  // The timestamp is at second-level granularity, and all parallel requests
+  // complete within the same second.
   const timestamp = Math.floor(Date.now() / 1000).toString();
   
   // Build all request objects
@@ -920,10 +928,10 @@ function updateAccountHistoryOnce(accounts, balancesMap) {
   
   // Fetch balances for each account to match Accounts sheet data source
   // Use prefetched balances if available, otherwise fetch them
-  const balances = balancesMap || fetchAccountDataInParallel(accounts, 'balances');
+  const accountBalancesMap = balancesMap || fetchAccountDataInParallel(accounts, 'balances');
   
   accounts.forEach((account) => {
-    const accountBalances = balances[account.id];
+    const accountBalances = accountBalancesMap[account.id];
     
     if (!accountBalances) {
       Logger.log(`updateAccountHistoryOnce: No balances data for account ${account.id}`);
