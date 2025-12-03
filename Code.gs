@@ -721,8 +721,8 @@ function refreshAccounts() {
       balances.forEach((bal) => {
         rows.push([
           account.name || account.number,
-          bal.cash || (account.balance && account.balance.total && account.balance.total.amount) || 0,
-          (bal.currency && bal.currency.code) || (account.balance && account.balance.total && account.balance.total.currency) || '',
+          bal.cash || 0,
+          (bal.currency && bal.currency.code) || '',
           '',
           (account.sync_status && account.sync_status.holdings && account.sync_status.holdings.last_successful_sync) || '',
           account.institution_name || '',
@@ -827,9 +827,7 @@ function updateAccountHistoryOnce(accounts) {
       // Update existing rows for today
       startRow = todayStartRow;
       // Delete old rows for today first
-      if (todayEndRow - todayStartRow + 1 > 0) {
-        sheet.deleteRows(todayStartRow, todayEndRow - todayStartRow + 1);
-      }
+      sheet.deleteRows(todayStartRow, todayEndRow - todayStartRow + 1);
     } else {
       // Append new rows
       startRow = sheet.getLastRow() + 1;
@@ -844,7 +842,7 @@ function updateAccountHistoryOnce(accounts) {
     sheet.getRange(startRow, 1, rows.length, 1).setNumberFormat('yyyy-mm-dd');
   }
   
-  // Auto-resize columns
+  // Auto-resize columns (6 columns: Timestamp, Account Name, Account ID, Balance, Currency, Institution)
   sheet.autoResizeColumns(1, 6);
 }
 
