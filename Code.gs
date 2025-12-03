@@ -277,7 +277,7 @@ function clearAllData() {
   PropertiesService.getUserProperties().deleteAllProperties();
 
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-  const targets = ['Holdings', 'Balances', 'Transactions'];
+  const targets = ['Accounts', 'Holdings', 'Balances', 'Transactions'];
 
   targets.forEach((name) => {
     const sheet = spreadsheet.getSheetByName(name);
@@ -693,6 +693,50 @@ function refreshBalances() {
 }
 
 /**
+ * Creates an accounts summary sheet.
+ */
+function refreshAccounts() {
+  try {
+    const accounts = snapTradeRequest('GET', '/api/v1/accounts', {}, null);
+    const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = spreadsheet.getSheetByName('Accounts') || spreadsheet.insertSheet('Accounts');
+
+    sheet.clear();
+    sheet.appendRow([
+      'Account Name',
+      'Balance',
+      'Currency',
+      'Notes',
+      'Last Update',
+      'Institution',
+      'Account ID',
+      'Raw Data',
+    ]);
+
+    const rows = accounts.map((account) => [
+      account.name || account.number,
+      (account.balance && account.balance.total && account.balance.total.amount) || 0,
+      (account.balance && account.balance.total && account.balance.total.currency) || '',
+      '',
+      (account.sync_status && account.sync_status.holdings && account.sync_status.holdings.last_successful_sync) || '',
+      account.institution_name || '',
+      account.id || '',
+      JSON.stringify(account),
+    ]);
+
+    if (rows.length > 0) {
+      sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
+      sheet.getRange(2, 2, rows.length, 1).setNumberFormat('$#,##0.00');
+    }
+    
+    SpreadsheetApp.getUi().alert(`Refreshed ${accounts.length} accounts.`);
+  } catch (error) {
+    SpreadsheetApp.getUi().alert(`Error refreshing accounts: ${error.message}`);
+    Logger.log(`refreshAccounts error: ${error.message}`);
+  }
+}
+
+/**
  * Fetches transactions for a date range.
  * @param {string} startDate - ISO date string (YYYY-MM-DD)
  * @param {string} endDate - ISO date string (YYYY-MM-DD)
@@ -710,33 +754,29 @@ function refreshTransactions(startDate, endDate) {
     sheet.clear();
     sheet.appendRow([
       'Date',
-      'Account',
-      'Type',
-      'Symbol',
-      'Description',
-      'Quantity',
-      'Price',
       'Amount',
-      'Fee',
-      'Currency',
+      'Description',
+      'Category',
+      'Account',
+      'Attachment',
+      'Transaction ID',
+      'Raw Data',
     ]);
 
     const rows = transactions.map((tx) => [
       tx.trade_date || tx.settlement_date,
-      (tx.account && (tx.account.name || tx.account.number)) || '',
-      tx.type,
-      (tx.symbol && tx.symbol.symbol) || '',
-      tx.description || '',
-      tx.units || '',
-      tx.price || '',
       tx.amount || 0,
-      tx.fee || 0,
-      (tx.currency && tx.currency.code) || 'USD',
+      tx.description || '',
+      tx.type,
+      (tx.account && (tx.account.name || tx.account.number)) || '',
+      '',
+      tx.id || '',
+      JSON.stringify(tx),
     ]);
 
     if (rows.length > 0) {
       sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
-      sheet.getRange(2, 8, rows.length, 2).setNumberFormat('$#,##0.00');
+      sheet.getRange(2, 2, rows.length, 1).setNumberFormat('$#,##0.00');
     }
     
     SpreadsheetApp.getUi().alert(`Refreshed ${rows.length} transactions.`);
@@ -769,6 +809,7 @@ function onOpen(e) {
     .addItem('🔗 Connect Brokerage', 'showConnectBrokerageDialog')
     .addItem('📋 View Connected Accounts', 'showAccountsSidebar')
     .addSeparator()
+    .addItem('📊 Refresh Accounts', 'refreshAccounts')
     .addItem('💰 Refresh Holdings', 'refreshHoldings')
     .addItem('💵 Refresh Balances', 'refreshBalances')
     .addItem('📜 Refresh Transactions', 'showTransactionDialog')
