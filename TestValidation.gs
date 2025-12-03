@@ -134,6 +134,8 @@ function testUpdateAccountHistoryOnce() {
 /**
  * Compares performance of sequential vs parallel API calls.
  * This test measures the actual performance improvement.
+ * Note: This test intentionally makes sequential API calls which may hit rate limits.
+ * Use with caution on accounts with many brokerages.
  */
 function compareSequentialVsParallel() {
   try {

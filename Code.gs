@@ -135,6 +135,8 @@ function snapTradeRequestWithRetry(method, path, params, body, maxRetries) {
 
 /**
  * Fetches data from multiple accounts in parallel using UrlFetchApp.fetchAll().
+ * Note: For very large account sets (50+), consider implementing batch processing
+ * to avoid API rate limits or Google Apps Script execution limits.
  * @param {Array} accounts - Array of account objects from SnapTrade API
  * @param {string} endpointSuffix - Endpoint suffix (e.g., 'holdings', 'balances')
  * @returns {Object} Map of accountId to response data
