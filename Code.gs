@@ -793,32 +793,45 @@ function updateAccountHistoryOnce(accounts) {
   const todayStr = Utilities.formatDate(today, Session.getScriptTimeZone(), 'yyyy-MM-dd');
   
   // Check if we already have entries for today
-  const data = sheet.getDataRange().getValues();
   let todayStartRow = -1;
   let todayEndRow = -1;
   
-  for (let i = 1; i < data.length; i++) { // Start from 1 to skip header
-    const rowDate = new Date(data[i][0]);
-    rowDate.setHours(0, 0, 0, 0);
-    const rowDateStr = Utilities.formatDate(rowDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  // Only check for existing entries if sheet has data beyond header
+  if (sheet.getLastRow() > 1) {
+    const data = sheet.getDataRange().getValues();
     
-    if (rowDateStr === todayStr) {
-      if (todayStartRow === -1) {
-        todayStartRow = i + 1; // +1 because array is 0-indexed but rows are 1-indexed
+    for (let i = 1; i < data.length; i++) { // Start from 1 to skip header
+      const rowDate = new Date(data[i][0]);
+      rowDate.setHours(0, 0, 0, 0);
+      const rowDateStr = Utilities.formatDate(rowDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+      
+      if (rowDateStr === todayStr) {
+        if (todayStartRow === -1) {
+          todayStartRow = i + 1; // +1 because array is 0-indexed but rows are 1-indexed
+        }
+        todayEndRow = i + 1;
       }
-      todayEndRow = i + 1;
     }
   }
   
   const timestamp = new Date();
-  const rows = accounts.map((account) => [
-    timestamp,
-    account.name || account.number,
-    account.id || '',
-    (account.balance && account.balance.total && account.balance.total.amount) || 0,
-    (account.balance && account.balance.total && account.balance.total.currency) || '',
-    account.institution_name || '',
-  ]);
+  const rows = [];
+  
+  // Fetch balances for each account to match Accounts sheet data source
+  accounts.forEach((account) => {
+    const balances = snapTradeRequest('GET', `/api/v1/accounts/${account.id}/balances`, {}, null);
+    
+    balances.forEach((bal) => {
+      rows.push([
+        timestamp,
+        account.name || account.number,
+        account.id || '',
+        bal.cash || 0,
+        (bal.currency && bal.currency.code) || '',
+        account.institution_name || '',
+      ]);
+    });
+  });
   
   if (rows.length > 0) {
     let startRow;
