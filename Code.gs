@@ -770,7 +770,7 @@ function refreshAccounts() {
     // Format header row
     formatSheetHeader(sheet);
     
-    // Auto-resize columns for better readability
+    // Auto-resize columns for better readability (excluding Raw Data column which can be very wide)
     sheet.autoResizeColumns(1, 7);
     
     SpreadsheetApp.getUi().alert(`Refreshed ${accounts.length} accounts.`);
@@ -873,7 +873,7 @@ function refreshTransactions(startDate, endDate) {
     // Format header row
     formatSheetHeader(sheet);
     
-    // Auto-resize columns for better readability
+    // Auto-resize columns for better readability (excluding Raw Data column which can be very wide)
     sheet.autoResizeColumns(1, 7);
     
     SpreadsheetApp.getUi().alert(`Refreshed ${rows.length} transactions.`);
