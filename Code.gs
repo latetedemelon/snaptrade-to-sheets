@@ -807,10 +807,10 @@ function trackAccountHistory() {
     ]);
     
     if (rows.length > 0) {
-      sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
+      const startRow = sheet.getLastRow() + 1;
+      sheet.getRange(startRow, 1, rows.length, rows[0].length).setValues(rows);
       
       // Format balance column as currency
-      const startRow = sheet.getLastRow() - rows.length + 1;
       sheet.getRange(startRow, 4, rows.length, 1).setNumberFormat('$#,##0.00');
       
       // Format timestamp column
