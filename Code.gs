@@ -245,8 +245,8 @@ function getExchangeRate(srcCurrencyCode, dstCurrencyCode) {
     const result = snapTradeRequest('GET', `/api/v1/currencies/rates/${srcCurrencyCode}/${dstCurrencyCode}`, {}, null);
     return result && result.rate ? result.rate : 1.0;
   } catch (error) {
-    Logger.log(`Error fetching exchange rate ${srcCurrencyCode} to ${dstCurrencyCode}: ${error.message}`);
-    return 1.0; // Fallback to 1.0 on error
+    Logger.log(`Error fetching exchange rate ${srcCurrencyCode} to ${dstCurrencyCode}: ${error.message}. Using 1.0 as fallback - CAD values may be inaccurate.`);
+    return 1.0; // Fallback to 1.0 on error - CAD values will not be accurate
   }
 }
 
@@ -744,6 +744,12 @@ function refreshAccounts() {
     accounts.forEach((account) => {
       const holdings = snapTradeRequest('GET', `/api/v1/accounts/${account.id}/holdings`, {}, null);
       
+      // Skip if holdings is null or undefined
+      if (!holdings) {
+        Logger.log(`No holdings data returned for account ${account.id}`);
+        return;
+      }
+      
       // Group cash and holdings by currency
       const byCurrency = {};
       
@@ -895,6 +901,12 @@ function updateAccountHistoryOnce(accounts) {
   // Fetch holdings for each account to match Accounts sheet data source
   accounts.forEach((account) => {
     const holdings = snapTradeRequest('GET', `/api/v1/accounts/${account.id}/holdings`, {}, null);
+    
+    // Skip if holdings is null or undefined
+    if (!holdings) {
+      Logger.log(`No holdings data returned for account ${account.id}`);
+      return;
+    }
     
     // Group cash and holdings by currency
     const byCurrency = {};
