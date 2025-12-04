@@ -230,6 +230,27 @@ function listUserAccounts() {
 }
 
 /**
+ * Gets the exchange rate between two currencies from SnapTrade API.
+ * @param {string} srcCurrencyCode - Source currency code (e.g., 'USD')
+ * @param {string} dstCurrencyCode - Destination currency code (e.g., 'CAD')
+ * @returns {number} Exchange rate, or 1.0 if currencies are the same or on error
+ */
+function getExchangeRate(srcCurrencyCode, dstCurrencyCode) {
+  // Return 1.0 if source and destination are the same
+  if (srcCurrencyCode === dstCurrencyCode) {
+    return 1.0;
+  }
+  
+  try {
+    const result = snapTradeRequest('GET', `/api/v1/currencies/rates/${srcCurrencyCode}/${dstCurrencyCode}`, {}, null);
+    return result && result.rate ? result.rate : 1.0;
+  } catch (error) {
+    Logger.log(`Error fetching exchange rate ${srcCurrencyCode} to ${dstCurrencyCode}: ${error.message}. Using 1.0 as fallback - CAD values may be inaccurate.`);
+    return 1.0; // Fallback to 1.0 on error - CAD values will not be accurate
+  }
+}
+
+/**
  * Returns data prepared for sidebar rendering.
  * @returns {Array<{name: string, institution: string, balance: number, status: string}>}
  */
@@ -691,7 +712,7 @@ function refreshHoldings() {
 }
 
 /**
- * Creates an accounts summary sheet with separate rows for each currency balance.
+ * Creates an accounts summary sheet with complete account information including cash, holdings, and total value.
  * Automatically updates account history (once per day).
  */
 function refreshAccounts() {
@@ -703,30 +724,82 @@ function refreshAccounts() {
     sheet.clear();
     sheet.appendRow([
       'Account Name',
-      'Balance',
+      'Account ID',
+      'Cash',
+      'Holdings Value',
+      'Total Value',
       'Currency',
-      'Notes',
+      'Total (CAD)',
       'Last Update',
       'Institution',
-      'Account ID',
       'Raw Data',
     ]);
 
     const rows = [];
     
-    // Fetch balances for each account to show separate rows per currency
+    // Cache exchange rates to minimize API calls
+    const exchangeRateCache = {};
+    
+    // Fetch holdings for each account to calculate complete picture
     accounts.forEach((account) => {
-      const balances = snapTradeRequest('GET', `/api/v1/accounts/${account.id}/balances`, {}, null);
+      const holdings = snapTradeRequest('GET', `/api/v1/accounts/${account.id}/holdings`, {}, null);
       
-      balances.forEach((bal) => {
+      // Skip if holdings is null or undefined
+      if (!holdings) {
+        Logger.log(`No holdings data returned for account ${account.id}`);
+        return;
+      }
+      
+      // Group cash and holdings by currency
+      const byCurrency = {};
+      
+      // Add cash balances
+      if (holdings.account_balances) {
+        holdings.account_balances.forEach((balance) => {
+          const currencyCode = (balance.currency && balance.currency.code) || 'USD';
+          if (!byCurrency[currencyCode]) {
+            byCurrency[currencyCode] = { cash: 0, holdingsValue: 0 };
+          }
+          byCurrency[currencyCode].cash += balance.cash || 0;
+        });
+      }
+      
+      // Add holdings value
+      if (holdings.positions) {
+        holdings.positions.forEach((position) => {
+          const currencyCode = (position.currency && position.currency.code) || 'USD';
+          if (!byCurrency[currencyCode]) {
+            byCurrency[currencyCode] = { cash: 0, holdingsValue: 0 };
+          }
+          const units = position.units || 0;
+          const price = position.price || 0;
+          byCurrency[currencyCode].holdingsValue += units * price;
+        });
+      }
+      
+      // Create a row for each currency
+      Object.keys(byCurrency).forEach((currencyCode) => {
+        const cash = byCurrency[currencyCode].cash;
+        const holdingsValue = byCurrency[currencyCode].holdingsValue;
+        const totalValue = cash + holdingsValue;
+        
+        // Get exchange rate to CAD (use cache)
+        const cacheKey = `${currencyCode}_CAD`;
+        if (!exchangeRateCache[cacheKey]) {
+          exchangeRateCache[cacheKey] = getExchangeRate(currencyCode, 'CAD');
+        }
+        const totalCAD = totalValue * exchangeRateCache[cacheKey];
+        
         rows.push([
           account.name || account.number,
-          bal.cash || 0,
-          (bal.currency && bal.currency.code) || '',
-          '',
+          account.id || '',
+          cash,
+          holdingsValue,
+          totalValue,
+          currencyCode,
+          totalCAD,
           (account.sync_status && account.sync_status.holdings && account.sync_status.holdings.last_successful_sync) || '',
           account.institution_name || '',
-          account.id || '',
           JSON.stringify(account),
         ]);
       });
@@ -734,17 +807,22 @@ function refreshAccounts() {
 
     if (rows.length > 0) {
       sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
-      sheet.getRange(2, 2, rows.length, 1).setNumberFormat('$#,##0.00');
+      // Format currency columns (Cash, Holdings Value, Total Value, Total (CAD))
+      sheet.getRange(2, 3, rows.length, 1).setNumberFormat('$#,##0.00');
+      sheet.getRange(2, 4, rows.length, 1).setNumberFormat('$#,##0.00');
+      sheet.getRange(2, 5, rows.length, 1).setNumberFormat('$#,##0.00');
+      sheet.getRange(2, 7, rows.length, 1).setNumberFormat('$#,##0.00');
     }
     
     // Format header row
     formatSheetHeader(sheet);
     
     // Auto-resize columns for better readability (excluding Raw Data column which can be very wide)
-    sheet.autoResizeColumns(1, 7);
+    sheet.autoResizeColumns(1, 9);
     
     // Hide Account ID and Raw Data columns by default
-    sheet.hideColumns(7, 2);
+    sheet.hideColumns(2, 1); // Hide Account ID (column 2)
+    sheet.hideColumns(10, 1); // Hide Raw Data (column 10)
     
     // Automatically update account history (once per day)
     updateAccountHistoryOnce(accounts);
@@ -784,7 +862,7 @@ function updateAccountHistoryOnce(accounts) {
   
   // Initialize sheet if empty
   if (sheet.getLastRow() === 0) {
-    sheet.appendRow(['Timestamp', 'Account Name', 'Account ID', 'Balance', 'Currency', 'Institution']);
+    sheet.appendRow(['Timestamp', 'Account Name', 'Account ID', 'Cash', 'Holdings Value', 'Total Value', 'Currency', 'Total (CAD)', 'Institution']);
     formatSheetHeader(sheet);
   }
   
@@ -817,17 +895,68 @@ function updateAccountHistoryOnce(accounts) {
   const timestamp = new Date();
   const rows = [];
   
-  // Fetch balances for each account to match Accounts sheet data source
+  // Cache exchange rates to minimize API calls
+  const exchangeRateCache = {};
+  
+  // Fetch holdings for each account to match Accounts sheet data source
   accounts.forEach((account) => {
-    const balances = snapTradeRequest('GET', `/api/v1/accounts/${account.id}/balances`, {}, null);
+    const holdings = snapTradeRequest('GET', `/api/v1/accounts/${account.id}/holdings`, {}, null);
     
-    balances.forEach((bal) => {
+    // Skip if holdings is null or undefined
+    if (!holdings) {
+      Logger.log(`No holdings data returned for account ${account.id}`);
+      return;
+    }
+    
+    // Group cash and holdings by currency
+    const byCurrency = {};
+    
+    // Add cash balances
+    if (holdings.account_balances) {
+      holdings.account_balances.forEach((balance) => {
+        const currencyCode = (balance.currency && balance.currency.code) || 'USD';
+        if (!byCurrency[currencyCode]) {
+          byCurrency[currencyCode] = { cash: 0, holdingsValue: 0 };
+        }
+        byCurrency[currencyCode].cash += balance.cash || 0;
+      });
+    }
+    
+    // Add holdings value
+    if (holdings.positions) {
+      holdings.positions.forEach((position) => {
+        const currencyCode = (position.currency && position.currency.code) || 'USD';
+        if (!byCurrency[currencyCode]) {
+          byCurrency[currencyCode] = { cash: 0, holdingsValue: 0 };
+        }
+        const units = position.units || 0;
+        const price = position.price || 0;
+        byCurrency[currencyCode].holdingsValue += units * price;
+      });
+    }
+    
+    // Create a row for each currency
+    Object.keys(byCurrency).forEach((currencyCode) => {
+      const cash = byCurrency[currencyCode].cash;
+      const holdingsValue = byCurrency[currencyCode].holdingsValue;
+      const totalValue = cash + holdingsValue;
+      
+      // Get exchange rate to CAD (use cache)
+      const cacheKey = `${currencyCode}_CAD`;
+      if (!exchangeRateCache[cacheKey]) {
+        exchangeRateCache[cacheKey] = getExchangeRate(currencyCode, 'CAD');
+      }
+      const totalCAD = totalValue * exchangeRateCache[cacheKey];
+      
       rows.push([
         timestamp,
         account.name || account.number,
         account.id || '',
-        bal.cash || 0,
-        (bal.currency && bal.currency.code) || '',
+        cash,
+        holdingsValue,
+        totalValue,
+        currencyCode,
+        totalCAD,
         account.institution_name || '',
       ]);
     });
@@ -848,15 +977,18 @@ function updateAccountHistoryOnce(accounts) {
     
     sheet.getRange(startRow, 1, rows.length, rows[0].length).setValues(rows);
     
-    // Format balance column as currency
+    // Format currency columns (Cash, Holdings Value, Total Value, Total (CAD))
     sheet.getRange(startRow, 4, rows.length, 1).setNumberFormat('$#,##0.00');
+    sheet.getRange(startRow, 5, rows.length, 1).setNumberFormat('$#,##0.00');
+    sheet.getRange(startRow, 6, rows.length, 1).setNumberFormat('$#,##0.00');
+    sheet.getRange(startRow, 8, rows.length, 1).setNumberFormat('$#,##0.00');
     
     // Format timestamp column to show only date
     sheet.getRange(startRow, 1, rows.length, 1).setNumberFormat('yyyy-mm-dd');
   }
   
-  // Auto-resize columns (6 columns: Timestamp, Account Name, Account ID, Balance, Currency, Institution)
-  sheet.autoResizeColumns(1, 6);
+  // Auto-resize columns (9 columns: Timestamp, Account Name, Account ID, Cash, Holdings Value, Total Value, Currency, Total (CAD), Institution)
+  sheet.autoResizeColumns(1, 9);
 }
 
 /**
