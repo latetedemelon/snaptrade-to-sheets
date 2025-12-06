@@ -842,7 +842,7 @@ function refreshHoldings() {
 }
 
 /**
- * Creates an accounts summary sheet with separate rows for each currency balance.
+ * Creates an accounts summary sheet with complete account information including cash, holdings, and total value.
  * Automatically updates account history (once per day).
  */
 function refreshAccounts() {
@@ -854,40 +854,75 @@ function refreshAccounts() {
     sheet.clear();
     sheet.appendRow([
       'Account Name',
-      'Balance',
-      'Balance (CAD)',
+      'Account ID',
+      'Cash',
+      'Holdings Value',
+      'Total Value',
       'Currency',
-      'Notes',
+      'Total (CAD)',
       'Last Update',
       'Institution',
-      'Account ID',
       'Raw Data',
     ]);
 
     const rows = [];
     
-    // Fetch balances for all accounts in parallel
-    const balancesMap = fetchAccountDataInParallel(accounts, 'balances');
+    // Fetch holdings for all accounts in parallel
+    const holdingsMap = fetchAccountDataInParallel(accounts, 'holdings');
     
-    // Fetch balances for each account to show separate rows per currency
+    // Fetch holdings for each account to calculate complete picture
     accounts.forEach((account) => {
-      const balances = balancesMap[account.id];
+      const holdings = holdingsMap[account.id];
       
-      if (!balances) {
-        Logger.log(`refreshAccounts: No balances data for account ${account.id}`);
+      // Skip if holdings is null or undefined
+      if (!holdings) {
+        Logger.log(`No holdings data returned for account ${account.id}`);
         return;
       }
       
-      balances.forEach((bal) => {
+      // Group cash and holdings by currency
+      const byCurrency = {};
+      
+      // Add cash balances
+      if (holdings.account_balances) {
+        holdings.account_balances.forEach((balance) => {
+          const currencyCode = (balance.currency && balance.currency.code) || 'USD';
+          if (!byCurrency[currencyCode]) {
+            byCurrency[currencyCode] = { cash: 0, holdingsValue: 0 };
+          }
+          byCurrency[currencyCode].cash += balance.cash || 0;
+        });
+      }
+      
+      // Add holdings value
+      if (holdings.positions) {
+        holdings.positions.forEach((position) => {
+          const currencyCode = (position.currency && position.currency.code) || 'USD';
+          if (!byCurrency[currencyCode]) {
+            byCurrency[currencyCode] = { cash: 0, holdingsValue: 0 };
+          }
+          const units = position.units || 0;
+          const price = position.price || 0;
+          byCurrency[currencyCode].holdingsValue += units * price;
+        });
+      }
+      
+      // Create a row for each currency
+      Object.keys(byCurrency).forEach((currencyCode) => {
+        const cash = byCurrency[currencyCode].cash;
+        const holdingsValue = byCurrency[currencyCode].holdingsValue;
+        const totalValue = cash + holdingsValue;
+        
         rows.push([
           account.name || account.number,
-          bal.cash || 0,
-          '', // Balance (CAD) - will be filled with formula
-          (bal.currency && bal.currency.code) || '',
-          '',
+          account.id || '',
+          cash,
+          holdingsValue,
+          totalValue,
+          currencyCode,
+          '', // Total (CAD) - will be filled with formula
           (account.sync_status && account.sync_status.holdings && account.sync_status.holdings.last_successful_sync) || '',
           account.institution_name || '',
-          account.id || '',
           JSON.stringify(account),
         ]);
       });
@@ -897,33 +932,36 @@ function refreshAccounts() {
       sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
       
       // Add formulas for CAD conversion using R1C1 notation for batch operations
-      // Column D is Currency (col 4), B is Balance (col 2)
-      const balanceCADFormulas = [];
+      // Column F is Currency (col 6), E is Total Value (col 5)
+      const totalCADFormulas = [];
       
       for (let i = 0; i < rows.length; i++) {
         // Using R1C1 notation: RC[x] means same row, column offset by x
-        balanceCADFormulas.push([`=IF(RC[1]="CAD", RC[-1], IF(RC[1]="", RC[-1], RC[-1] * GOOGLEFINANCE("CURRENCY:" & RC[1] & "CAD")))`]);
+        totalCADFormulas.push([`=IF(RC[-1]="CAD", RC[-2], IF(RC[-1]="", RC[-2], RC[-2] * GOOGLEFINANCE("CURRENCY:" & RC[-1] & "CAD")))`]);
       }
       
       // Set all formulas at once
-      sheet.getRange(2, 3, rows.length, 1).setFormulasR1C1(balanceCADFormulas);
+      sheet.getRange(2, 7, rows.length, 1).setFormulasR1C1(totalCADFormulas);
       
-      // Format balance columns as currency
-      sheet.getRange(2, 2, rows.length, 1).setNumberFormat('$#,##0.00'); // Balance
-      sheet.getRange(2, 3, rows.length, 1).setNumberFormat('$#,##0.00'); // Balance (CAD)
+      // Format currency columns (Cash, Holdings Value, Total Value, Total (CAD))
+      sheet.getRange(2, 3, rows.length, 1).setNumberFormat('$#,##0.00');
+      sheet.getRange(2, 4, rows.length, 1).setNumberFormat('$#,##0.00');
+      sheet.getRange(2, 5, rows.length, 1).setNumberFormat('$#,##0.00');
+      sheet.getRange(2, 7, rows.length, 1).setNumberFormat('$#,##0.00');
     }
     
     // Format header row
     formatSheetHeader(sheet);
     
     // Auto-resize columns for better readability (excluding Raw Data column which can be very wide)
-    sheet.autoResizeColumns(1, 8);
+    sheet.autoResizeColumns(1, 9);
     
     // Hide Account ID and Raw Data columns by default
-    sheet.hideColumns(8, 2);
+    sheet.hideColumns(2, 1); // Hide Account ID (column 2)
+    sheet.hideColumns(10, 1); // Hide Raw Data (column 10)
     
-    // Automatically update account history (once per day) - pass the already fetched balances
-    updateAccountHistoryOnce(accounts, balancesMap);
+    // Automatically update account history (once per day) - pass the already-fetched holdings
+    updateAccountHistoryOnce(accounts, holdingsMap);
     
     SpreadsheetApp.getUi().alert(`Refreshed ${rows.length} account balances from ${accounts.length} accounts.`);
   } catch (error) {
@@ -953,15 +991,15 @@ function trackAccountHistory() {
  * Updates account history, but only once per day. If called multiple times in the same day,
  * updates existing rows instead of creating new ones.
  * @param {Array} accounts - Array of account objects from SnapTrade API
- * @param {Object} balancesMap - Optional map of accountId to balances data (to avoid duplicate API calls)
+ * @param {Object} holdingsMap - Optional map of accountId to holdings data (to avoid duplicate API calls)
  */
-function updateAccountHistoryOnce(accounts, balancesMap) {
+function updateAccountHistoryOnce(accounts, holdingsMap) {
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = spreadsheet.getSheetByName('Account History') || spreadsheet.insertSheet('Account History');
   
   // Initialize sheet if empty
   if (sheet.getLastRow() === 0) {
-    sheet.appendRow(['Timestamp', 'Account Name', 'Account ID', 'Balance', 'Balance (CAD)', 'Currency', 'Institution']);
+    sheet.appendRow(['Timestamp', 'Account Name', 'Account ID', 'Cash', 'Holdings Value', 'Total Value', 'Currency', 'Total (CAD)', 'Institution']);
     formatSheetHeader(sheet);
   }
   
@@ -994,26 +1032,61 @@ function updateAccountHistoryOnce(accounts, balancesMap) {
   const timestamp = new Date();
   const rows = [];
   
-  // Fetch balances for each account to match Accounts sheet data source
-  // Use prefetched balances if available, otherwise fetch them
-  const accountBalancesMap = balancesMap || fetchAccountDataInParallel(accounts, 'balances');
+  // Use prefetched holdings if available, otherwise fetch them
+  const accountHoldingsMap = holdingsMap || fetchAccountDataInParallel(accounts, 'holdings');
   
+  // Fetch holdings for each account to match Accounts sheet data source
   accounts.forEach((account) => {
-    const accountBalances = accountBalancesMap[account.id];
+    const holdings = accountHoldingsMap[account.id];
     
-    if (!accountBalances) {
-      Logger.log(`updateAccountHistoryOnce: No balances data for account ${account.id}`);
+    // Skip if holdings is null or undefined
+    if (!holdings) {
+      Logger.log(`No holdings data returned for account ${account.id}`);
       return;
     }
     
-    accountBalances.forEach((bal) => {
+    // Group cash and holdings by currency
+    const byCurrency = {};
+    
+    // Add cash balances
+    if (holdings.account_balances) {
+      holdings.account_balances.forEach((balance) => {
+        const currencyCode = (balance.currency && balance.currency.code) || 'USD';
+        if (!byCurrency[currencyCode]) {
+          byCurrency[currencyCode] = { cash: 0, holdingsValue: 0 };
+        }
+        byCurrency[currencyCode].cash += balance.cash || 0;
+      });
+    }
+    
+    // Add holdings value
+    if (holdings.positions) {
+      holdings.positions.forEach((position) => {
+        const currencyCode = (position.currency && position.currency.code) || 'USD';
+        if (!byCurrency[currencyCode]) {
+          byCurrency[currencyCode] = { cash: 0, holdingsValue: 0 };
+        }
+        const units = position.units || 0;
+        const price = position.price || 0;
+        byCurrency[currencyCode].holdingsValue += units * price;
+      });
+    }
+    
+    // Create a row for each currency
+    Object.keys(byCurrency).forEach((currencyCode) => {
+      const cash = byCurrency[currencyCode].cash;
+      const holdingsValue = byCurrency[currencyCode].holdingsValue;
+      const totalValue = cash + holdingsValue;
+      
       rows.push([
         timestamp,
         account.name || account.number,
         account.id || '',
-        bal.cash || 0,
-        '', // Balance (CAD) - will be filled with formula
-        (bal.currency && bal.currency.code) || '',
+        cash,
+        holdingsValue,
+        totalValue,
+        currencyCode,
+        '', // Total (CAD) - will be filled with formula
         account.institution_name || '',
       ]);
     });
@@ -1035,27 +1108,29 @@ function updateAccountHistoryOnce(accounts, balancesMap) {
     sheet.getRange(startRow, 1, rows.length, rows[0].length).setValues(rows);
     
     // Add formulas for CAD conversion using R1C1 notation for batch operations
-    // Column F is Currency (col 6), D is Balance (col 4)
-    const balanceCADFormulas = [];
+    // Column G is Currency (col 7), F is Total Value (col 6)
+    const totalCADFormulas = [];
     
     for (let i = 0; i < rows.length; i++) {
       // Using R1C1 notation: RC[x] means same row, column offset by x
-      balanceCADFormulas.push([`=IF(RC[1]="CAD", RC[-1], IF(RC[1]="", RC[-1], RC[-1] * GOOGLEFINANCE("CURRENCY:" & RC[1] & "CAD")))`]);
+      totalCADFormulas.push([`=IF(RC[-1]="CAD", RC[-2], IF(RC[-1]="", RC[-2], RC[-2] * GOOGLEFINANCE("CURRENCY:" & RC[-1] & "CAD")))`]);
     }
     
     // Set all formulas at once
-    sheet.getRange(startRow, 5, rows.length, 1).setFormulasR1C1(balanceCADFormulas);
+    sheet.getRange(startRow, 8, rows.length, 1).setFormulasR1C1(totalCADFormulas);
     
-    // Format balance columns as currency
-    sheet.getRange(startRow, 4, rows.length, 1).setNumberFormat('$#,##0.00'); // Balance
-    sheet.getRange(startRow, 5, rows.length, 1).setNumberFormat('$#,##0.00'); // Balance (CAD)
+    // Format currency columns (Cash, Holdings Value, Total Value, Total (CAD))
+    sheet.getRange(startRow, 4, rows.length, 1).setNumberFormat('$#,##0.00');
+    sheet.getRange(startRow, 5, rows.length, 1).setNumberFormat('$#,##0.00');
+    sheet.getRange(startRow, 6, rows.length, 1).setNumberFormat('$#,##0.00');
+    sheet.getRange(startRow, 8, rows.length, 1).setNumberFormat('$#,##0.00');
     
     // Format timestamp column to show only date
     sheet.getRange(startRow, 1, rows.length, 1).setNumberFormat('yyyy-mm-dd');
   }
   
-  // Auto-resize columns (7 columns: Timestamp, Account Name, Account ID, Balance, Balance (CAD), Currency, Institution)
-  sheet.autoResizeColumns(1, 7);
+  // Auto-resize columns (9 columns: Timestamp, Account Name, Account ID, Cash, Holdings Value, Total Value, Currency, Total (CAD), Institution)
+  sheet.autoResizeColumns(1, 9);
 }
 
 /**
