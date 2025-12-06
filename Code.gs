@@ -324,6 +324,27 @@ function listUserAccounts() {
 }
 
 /**
+ * Gets the exchange rate between two currencies from SnapTrade API.
+ * @param {string} srcCurrencyCode - Source currency code (e.g., 'USD')
+ * @param {string} dstCurrencyCode - Destination currency code (e.g., 'CAD')
+ * @returns {number} Exchange rate, or 1.0 if currencies are the same or on error
+ */
+function getExchangeRate(srcCurrencyCode, dstCurrencyCode) {
+  // Return 1.0 if source and destination are the same
+  if (srcCurrencyCode === dstCurrencyCode) {
+    return 1.0;
+  }
+  
+  try {
+    const result = snapTradeRequest('GET', `/api/v1/currencies/rates/${srcCurrencyCode}/${dstCurrencyCode}`, {}, null);
+    return result && result.rate ? result.rate : 1.0;
+  } catch (error) {
+    Logger.log(`Error fetching exchange rate ${srcCurrencyCode} to ${dstCurrencyCode}: ${error.message}. Using 1.0 as fallback - CAD values may be inaccurate.`);
+    return 1.0; // Fallback to 1.0 on error - CAD values will not be accurate
+  }
+}
+
+/**
  * Returns data prepared for sidebar rendering.
  * @returns {Array<{name: string, institution: string, balance: number, status: string}>}
  */
@@ -867,12 +888,12 @@ function refreshAccounts() {
 
     const rows = [];
     
-    // Fetch holdings for all accounts in parallel
-    const holdingsMap = fetchAccountDataInParallel(accounts, 'holdings');
+    // Cache exchange rates to minimize API calls
+    const exchangeRateCache = {};
     
     // Fetch holdings for each account to calculate complete picture
     accounts.forEach((account) => {
-      const holdings = holdingsMap[account.id];
+      const holdings = snapTradeRequest('GET', `/api/v1/accounts/${account.id}/holdings`, {}, null);
       
       // Skip if holdings is null or undefined
       if (!holdings) {
@@ -913,6 +934,13 @@ function refreshAccounts() {
         const holdingsValue = byCurrency[currencyCode].holdingsValue;
         const totalValue = cash + holdingsValue;
         
+        // Get exchange rate to CAD (use cache)
+        const cacheKey = `${currencyCode}_CAD`;
+        if (!exchangeRateCache[cacheKey]) {
+          exchangeRateCache[cacheKey] = getExchangeRate(currencyCode, 'CAD');
+        }
+        const totalCAD = totalValue * exchangeRateCache[cacheKey];
+        
         rows.push([
           account.name || account.number,
           account.id || '',
@@ -920,7 +948,7 @@ function refreshAccounts() {
           holdingsValue,
           totalValue,
           currencyCode,
-          '', // Total (CAD) - will be filled with formula
+          totalCAD,
           (account.sync_status && account.sync_status.holdings && account.sync_status.holdings.last_successful_sync) || '',
           account.institution_name || '',
           JSON.stringify(account),
@@ -1032,12 +1060,12 @@ function updateAccountHistoryOnce(accounts, holdingsMap) {
   const timestamp = new Date();
   const rows = [];
   
-  // Use prefetched holdings if available, otherwise fetch them
-  const accountHoldingsMap = holdingsMap || fetchAccountDataInParallel(accounts, 'holdings');
+  // Cache exchange rates to minimize API calls
+  const exchangeRateCache = {};
   
   // Fetch holdings for each account to match Accounts sheet data source
   accounts.forEach((account) => {
-    const holdings = accountHoldingsMap[account.id];
+    const holdings = snapTradeRequest('GET', `/api/v1/accounts/${account.id}/holdings`, {}, null);
     
     // Skip if holdings is null or undefined
     if (!holdings) {
@@ -1078,6 +1106,13 @@ function updateAccountHistoryOnce(accounts, holdingsMap) {
       const holdingsValue = byCurrency[currencyCode].holdingsValue;
       const totalValue = cash + holdingsValue;
       
+      // Get exchange rate to CAD (use cache)
+      const cacheKey = `${currencyCode}_CAD`;
+      if (!exchangeRateCache[cacheKey]) {
+        exchangeRateCache[cacheKey] = getExchangeRate(currencyCode, 'CAD');
+      }
+      const totalCAD = totalValue * exchangeRateCache[cacheKey];
+      
       rows.push([
         timestamp,
         account.name || account.number,
@@ -1086,7 +1121,7 @@ function updateAccountHistoryOnce(accounts, holdingsMap) {
         holdingsValue,
         totalValue,
         currencyCode,
-        '', // Total (CAD) - will be filled with formula
+        totalCAD,
         account.institution_name || '',
       ]);
     });
