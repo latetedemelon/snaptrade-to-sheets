@@ -469,13 +469,29 @@ function calculateBalanceByCurrency(holdings) {
   
   if (!holdings) return byCurrency;
   
-  // Add cash balances
+  // Log the entire holdings structure to understand what fields are available
+  Logger.log(`Holdings object keys: ${Object.keys(holdings).join(', ')}`);
   if (holdings.account_balances) {
-    holdings.account_balances.forEach((balance) => {
+    Logger.log(`account_balances exists with ${holdings.account_balances.length} items`);
+  }
+  if (holdings.balances) {
+    Logger.log(`balances exists with ${holdings.balances.length} items`);
+  }
+  
+  // Add cash balances
+  // Try both 'account_balances' and 'balances' field names
+  const balancesArray = holdings.account_balances || holdings.balances;
+  
+  if (balancesArray) {
+    balancesArray.forEach((balance) => {
       const currencyCode = (balance.currency && balance.currency.code) || 'USD';
       if (!byCurrency[currencyCode]) {
         byCurrency[currencyCode] = { cash: 0, holdingsValue: 0 };
       }
+      
+      // Log balance structure to debug cash field issues
+      Logger.log(`Balance object for ${currencyCode}: ${JSON.stringify(balance)}`);
+      
       // Try to get cash from multiple possible fields
       const cashAmount = balance.cash || balance.total || balance.available || 0;
       byCurrency[currencyCode].cash += cashAmount;
