@@ -460,6 +460,49 @@ function clearToast() {
 
 
 /**
+ * Creates a default account row with zero values when holdings data is unavailable or empty.
+ * @param {Object} account - Account object
+ * @param {Object} options - Options object with timestamp and includeRawData flags
+ * @returns {Array} Row data array
+ */
+function createDefaultAccountRow(account, options = {}) {
+  const { timestamp, includeRawData = true } = options;
+  
+  const baseFields = [
+    account.institution_name || '',
+    account.name || account.number,
+    account.id || '',
+    0, // Cash
+    0, // Holdings Value
+    0, // Total Value
+    'USD', // Default currency
+    '', // Total (CAD) - will be filled with formula
+  ];
+  
+  // For history sheet: [timestamp, ...baseFields, institution]
+  if (timestamp) {
+    return [
+      timestamp,
+      account.name || account.number,
+      account.id || '',
+      0, // Cash
+      0, // Holdings Value
+      0, // Total Value
+      'USD',
+      '', // Total (CAD)
+      account.institution_name || '',
+    ];
+  }
+  
+  // For accounts sheet: [...baseFields, lastUpdate, rawData]
+  return [
+    ...baseFields,
+    (account.sync_status && account.sync_status.holdings && account.sync_status.holdings.last_successful_sync) || '',
+    includeRawData ? JSON.stringify(account) : '',
+  ];
+}
+
+/**
  * Calculates balance by currency from holdings data.
  * @param {Object} holdings - Holdings object from API
  * @returns {Object} Map of currency code to {cash, holdingsValue}
@@ -480,19 +523,10 @@ function calculateBalanceByCurrency(holdings) {
         byCurrency[currencyCode] = { cash: 0, holdingsValue: 0 };
       }
       
-      // Try to get cash from multiple possible fields
+      // Get cash amount (with fallbacks for API variations)
       const cashAmount = balance.cash || balance.total || balance.available || 0;
       byCurrency[currencyCode].cash += cashAmount;
     });
-  } else if (balancesArray && !Array.isArray(balancesArray)) {
-    // If balances is an object (not array), treat it as a single balance
-    const balance = balancesArray;
-    const currencyCode = (balance.currency && balance.currency.code) || 'USD';
-    if (!byCurrency[currencyCode]) {
-      byCurrency[currencyCode] = { cash: 0, holdingsValue: 0 };
-    }
-    const cashAmount = balance.cash || balance.total || balance.available || 0;
-    byCurrency[currencyCode].cash += cashAmount;
   }
   
   // Add holdings value
@@ -1126,19 +1160,7 @@ function refreshAccounts() {
       // Log if holdings is null or undefined, but still include the account with zero values
       if (!holdings) {
         Logger.log(`No holdings data returned for account ${account.id} (${account.name || account.number}). Including account with zero values.`);
-        // Create a default USD row with zero values for accounts without holdings data
-        rows.push([
-          account.institution_name || '',
-          account.name || account.number,
-          account.id || '',
-          0,
-          0,
-          0,
-          'USD',
-          '', // Total (CAD) - will be filled with formula
-          (account.sync_status && account.sync_status.holdings && account.sync_status.holdings.last_successful_sync) || '',
-          JSON.stringify(account),
-        ]);
+        rows.push(createDefaultAccountRow(account));
         return;
       }
       
@@ -1148,18 +1170,7 @@ function refreshAccounts() {
       // If no currencies found (empty holdings), create a default entry
       if (Object.keys(byCurrency).length === 0) {
         Logger.log(`No currency data found for account ${account.id} (${account.name || account.number}). Adding with zero values.`);
-        rows.push([
-          account.institution_name || '',
-          account.name || account.number,
-          account.id || '',
-          0,
-          0,
-          0,
-          'USD',
-          '', // Total (CAD) - will be filled with formula
-          (account.sync_status && account.sync_status.holdings && account.sync_status.holdings.last_successful_sync) || '',
-          JSON.stringify(account),
-        ]);
+        rows.push(createDefaultAccountRow(account));
         return;
       }
       
@@ -1297,18 +1308,7 @@ function updateAccountHistoryOnce(accounts, holdingsMap) {
     // Log if holdings is null or undefined, but still include the account with zero values
     if (!holdings) {
       Logger.log(`No holdings data returned for account ${account.id} (${account.name || account.number}). Including account with zero values.`);
-      // Create a default USD row with zero values for accounts without holdings data
-      rows.push([
-        timestamp,
-        account.name || account.number,
-        account.id || '',
-        0,
-        0,
-        0,
-        'USD',
-        '', // Total (CAD) - will be filled with formula
-        account.institution_name || '',
-      ]);
+      rows.push(createDefaultAccountRow(account, { timestamp }));
       return;
     }
     
@@ -1318,17 +1318,7 @@ function updateAccountHistoryOnce(accounts, holdingsMap) {
     // If no currencies found (empty holdings), create a default entry
     if (Object.keys(byCurrency).length === 0) {
       Logger.log(`No currency data found for account ${account.id} (${account.name || account.number}). Adding with zero values.`);
-      rows.push([
-        timestamp,
-        account.name || account.number,
-        account.id || '',
-        0,
-        0,
-        0,
-        'USD',
-        '', // Total (CAD) - will be filled with formula
-        account.institution_name || '',
-      ]);
+      rows.push(createDefaultAccountRow(account, { timestamp }));
       return;
     }
     
