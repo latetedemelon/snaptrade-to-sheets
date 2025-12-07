@@ -462,24 +462,13 @@ function clearToast() {
 /**
  * Creates a default account row with zero values when holdings data is unavailable or empty.
  * @param {Object} account - Account object
- * @param {Object} options - Options object with timestamp and includeRawData flags
+ * @param {Object} options - Options object with timestamp flag
  * @returns {Array} Row data array
  */
 function createDefaultAccountRow(account, options = {}) {
-  const { timestamp, includeRawData = true } = options;
+  const { timestamp } = options;
   
-  const baseFields = [
-    account.institution_name || '',
-    account.name || account.number,
-    account.id || '',
-    0, // Cash
-    0, // Holdings Value
-    0, // Total Value
-    'USD', // Default currency
-    '', // Total (CAD) - will be filled with formula
-  ];
-  
-  // For history sheet: [timestamp, ...baseFields, institution]
+  // For history sheet: [timestamp, accountName, accountId, cash, holdingsValue, totalValue, currency, totalCAD, institution]
   if (timestamp) {
     return [
       timestamp,
@@ -494,11 +483,18 @@ function createDefaultAccountRow(account, options = {}) {
     ];
   }
   
-  // For accounts sheet: [...baseFields, lastUpdate, rawData]
+  // For accounts sheet: [institution, accountName, accountId, cash, holdingsValue, totalValue, currency, totalCAD, lastUpdate, rawData]
   return [
-    ...baseFields,
+    account.institution_name || '',
+    account.name || account.number,
+    account.id || '',
+    0, // Cash
+    0, // Holdings Value
+    0, // Total Value
+    'USD',
+    '', // Total (CAD)
     (account.sync_status && account.sync_status.holdings && account.sync_status.holdings.last_successful_sync) || '',
-    includeRawData ? JSON.stringify(account) : '',
+    JSON.stringify(account),
   ];
 }
 
@@ -513,7 +509,8 @@ function calculateBalanceByCurrency(holdings) {
   if (!holdings) return byCurrency;
   
   // Add cash balances
-  // Try both 'account_balances' and 'balances' field names (API uses 'balances')
+  // Try both 'account_balances' and 'balances' field names for backward compatibility
+  // The SnapTrade API uses 'balances', but we check both to handle potential variations
   const balancesArray = holdings.account_balances || holdings.balances;
   
   if (balancesArray && Array.isArray(balancesArray)) {

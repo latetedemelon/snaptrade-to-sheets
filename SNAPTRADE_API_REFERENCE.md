@@ -44,10 +44,12 @@ Each item in the `balances` array has this structure:
     "name": "US Dollar",
     "id": "57f81c53-bdda-45a7-a51f-032afd1ae41b"
   },
-  "cash": 26535.3624,                  // ⭐ Cash amount - PRIMARY field
-  "buying_power": 26535.3624           // Available buying power
+  "cash": 26535.3624,                  // ⭐ Cash amount - PRIMARY field (Number, can be negative for margin)
+  "buying_power": 26535.3624           // Available buying power (Number)
 }
 ```
+
+**Note**: Financial amounts are returned as Numbers with decimal precision. JavaScript handles these as 64-bit floating point, which is sufficient for display purposes. For precise calculations involving money, consider using the Google Sheets built-in number formatting (`$#,##0.00`) to handle display rounding.
 
 ### Position Object Structure
 
