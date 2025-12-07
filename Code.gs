@@ -330,12 +330,52 @@ function listUserAccounts() {
 function getAccountsForSidebar() {
   try {
     const accounts = listUserAccounts();
-    return accounts.map((account) => ({
-      name: account.name || account.number,
-      institution: account.institution_name || 'Unknown',
-      balance: (account.balance && account.balance.total && account.balance.total.amount) || 0,
-      status: account.sync_status || 'Connected',
-    }));
+    
+    // Fetch holdings for all accounts in parallel to get accurate balance data
+    const holdingsMap = fetchAccountDataInParallel(accounts, 'holdings');
+    
+    return accounts.map((account) => {
+      // Extract meaningful status from sync_status object
+      let status = 'Connected';
+      if (account.sync_status) {
+        if (account.sync_status.holdings && account.sync_status.holdings.status) {
+          status = account.sync_status.holdings.status;
+        } else if (account.sync_status.initial_sync_completed === false) {
+          status = 'Syncing';
+        } else if (account.sync_status.initial_sync_completed === true) {
+          status = 'Connected';
+        }
+      }
+      
+      // Calculate total balance from holdings data (cash + securities)
+      let totalBalance = 0;
+      const holdings = holdingsMap[account.id];
+      
+      if (holdings) {
+        // Sum cash from account_balances across all currencies
+        if (holdings.account_balances) {
+          holdings.account_balances.forEach((balance) => {
+            totalBalance += balance.cash || 0;
+          });
+        }
+        
+        // Sum holdings value from positions across all currencies
+        if (holdings.positions) {
+          holdings.positions.forEach((position) => {
+            const units = position.units || 0;
+            const price = position.price || 0;
+            totalBalance += units * price;
+          });
+        }
+      }
+      
+      return {
+        name: account.name || account.number,
+        institution: account.institution_name || 'Unknown',
+        balance: totalBalance,
+        status: status,
+      };
+    });
   } catch (error) {
     Logger.log(`getAccountsForSidebar error: ${error.message}`);
     return { error: error.message };

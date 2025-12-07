@@ -250,3 +250,70 @@ function runAllValidationTests() {
   
   return results;
 }
+
+/**
+ * Tests the getAccountsForSidebar function to ensure it correctly:
+ * 1. Extracts meaningful status strings from sync_status objects
+ * 2. Calculates balances from holdings data (cash + securities)
+ */
+function testGetAccountsForSidebar() {
+  try {
+    Logger.log('[TEST] Starting getAccountsForSidebar test');
+    
+    const sidebarData = getAccountsForSidebar();
+    
+    if (sidebarData.error) {
+      Logger.log(`[TEST] ✗ Error returned: ${sidebarData.error}`);
+      return { success: false, error: sidebarData.error };
+    }
+    
+    Logger.log(`[TEST] Retrieved ${sidebarData.length} accounts for sidebar`);
+    
+    let statusOkCount = 0;
+    let balanceOkCount = 0;
+    
+    sidebarData.forEach((account, index) => {
+      Logger.log(`[TEST] Account ${index + 1}:`);
+      Logger.log(`[TEST]   Name: ${account.name}`);
+      Logger.log(`[TEST]   Institution: ${account.institution}`);
+      Logger.log(`[TEST]   Balance: $${account.balance.toFixed(2)}`);
+      Logger.log(`[TEST]   Status: ${account.status}`);
+      
+      // Check that status is a string (not [object Object])
+      if (typeof account.status === 'string' && !account.status.includes('[object')) {
+        statusOkCount++;
+        Logger.log(`[TEST]   ✓ Status is a valid string`);
+      } else {
+        Logger.log(`[TEST]   ✗ Status is invalid: ${account.status}`);
+      }
+      
+      // Check that balance is a number
+      if (typeof account.balance === 'number' && !isNaN(account.balance)) {
+        balanceOkCount++;
+        Logger.log(`[TEST]   ✓ Balance is a valid number`);
+      } else {
+        Logger.log(`[TEST]   ✗ Balance is invalid: ${account.balance}`);
+      }
+    });
+    
+    const success = statusOkCount === sidebarData.length && balanceOkCount === sidebarData.length;
+    
+    Logger.log('[TEST] ========================================');
+    Logger.log(`[TEST] Status validation: ${statusOkCount}/${sidebarData.length} accounts`);
+    Logger.log(`[TEST] Balance validation: ${balanceOkCount}/${sidebarData.length} accounts`);
+    Logger.log(`[TEST] Overall result: ${success ? '✓ PASSED' : '✗ FAILED'}`);
+    Logger.log('[TEST] ========================================');
+    
+    return {
+      success: success,
+      totalAccounts: sidebarData.length,
+      statusOk: statusOkCount,
+      balanceOk: balanceOkCount,
+    };
+    
+  } catch (error) {
+    Logger.log(`[TEST] ✗ Test failed: ${error.message}`);
+    Logger.log(`[TEST] Stack trace: ${error.stack}`);
+    return { success: false, error: error.message };
+  }
+}
