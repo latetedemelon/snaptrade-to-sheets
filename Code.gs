@@ -1221,10 +1221,17 @@ function refreshAccounts() {
     sheet.hideColumns(9, 1); // Hide Last Update (column 9)
     sheet.hideColumns(10, 1); // Hide Raw Data (column 10)
     
-    // Automatically update account history (once per day) - pass the already-fetched holdings
-    updateAccountHistoryOnce(accounts, holdingsMap);
-    
+    // Clear toast before updating history to ensure it doesn't get stuck
     clearToast();
+    
+    // Automatically update account history (once per day) - pass the already-fetched holdings
+    try {
+      updateAccountHistoryOnce(accounts, holdingsMap);
+    } catch (historyError) {
+      Logger.log(`Error updating account history: ${historyError.message}`);
+      // Continue execution - history update failure shouldn't prevent accounts refresh
+    }
+    
     SpreadsheetApp.getUi().alert(`Refreshed ${rows.length} account balances from ${accounts.length} accounts.`);
   } catch (error) {
     clearToast();
