@@ -476,7 +476,14 @@ function calculateBalanceByCurrency(holdings) {
       if (!byCurrency[currencyCode]) {
         byCurrency[currencyCode] = { cash: 0, holdingsValue: 0 };
       }
-      byCurrency[currencyCode].cash += balance.cash || 0;
+      // Try to get cash from multiple possible fields
+      const cashAmount = balance.cash || balance.total || balance.available || 0;
+      byCurrency[currencyCode].cash += cashAmount;
+      
+      // Log if we found a balance but no cash field
+      if (cashAmount > 0 && !balance.cash) {
+        Logger.log(`Found non-zero balance in ${balance.total ? 'total' : 'available'} field for currency ${currencyCode}`);
+      }
     });
   }
   
@@ -1130,6 +1137,24 @@ function refreshAccounts() {
       // Use helper function to calculate balance by currency
       const byCurrency = calculateBalanceByCurrency(holdings);
       
+      // If no currencies found (empty holdings), create a default entry
+      if (Object.keys(byCurrency).length === 0) {
+        Logger.log(`No currency data found for account ${account.id} (${account.name || account.number}). Adding with zero values.`);
+        rows.push([
+          account.institution_name || '',
+          account.name || account.number,
+          account.id || '',
+          0,
+          0,
+          0,
+          'USD',
+          '', // Total (CAD) - will be filled with formula
+          (account.sync_status && account.sync_status.holdings && account.sync_status.holdings.last_successful_sync) || '',
+          JSON.stringify(account),
+        ]);
+        return;
+      }
+      
       // Create a row for each currency
       Object.keys(byCurrency).forEach((currencyCode) => {
         const cash = byCurrency[currencyCode].cash;
@@ -1161,11 +1186,12 @@ function refreshAccounts() {
       // Set all formulas at once
       sheet.getRange(2, 8, rows.length, 1).setFormulasR1C1(totalCADFormulas);
       
-      // Format currency columns (Cash, Holdings Value, Total Value, Total (CAD)) - optimized with RangeList
+      // Format currency columns (Cash, Holdings Value, Total Value, Total (CAD))
       const currencyFormat = CONFIG.SHEETS.CURRENCY_FORMAT;
       const currencyCols = CONFIG.SHEETS.COLUMNS.ACCOUNTS.CURRENCY_COLS;
-      const ranges = currencyCols.map(col => sheet.getRange(2, col, rows.length, 1));
-      sheet.getRangeList(ranges).setNumberFormat(currencyFormat);
+      currencyCols.forEach(col => {
+        sheet.getRange(2, col, rows.length, 1).setNumberFormat(currencyFormat);
+      });
     }
     
     // Format header row
@@ -1260,14 +1286,43 @@ function updateAccountHistoryOnce(accounts, holdingsMap) {
   accounts.forEach((account) => {
     const holdings = accountHoldingsMap[account.id];
     
-    // Skip if holdings is null or undefined
+    // Log if holdings is null or undefined, but still include the account with zero values
     if (!holdings) {
-      Logger.log(`No holdings data returned for account ${account.id}`);
+      Logger.log(`No holdings data returned for account ${account.id} (${account.name || account.number}). Including account with zero values.`);
+      // Create a default USD row with zero values for accounts without holdings data
+      rows.push([
+        timestamp,
+        account.name || account.number,
+        account.id || '',
+        0,
+        0,
+        0,
+        'USD',
+        '', // Total (CAD) - will be filled with formula
+        account.institution_name || '',
+      ]);
       return;
     }
     
     // Use helper function to calculate balance by currency
     const byCurrency = calculateBalanceByCurrency(holdings);
+    
+    // If no currencies found (empty holdings), create a default entry
+    if (Object.keys(byCurrency).length === 0) {
+      Logger.log(`No currency data found for account ${account.id} (${account.name || account.number}). Adding with zero values.`);
+      rows.push([
+        timestamp,
+        account.name || account.number,
+        account.id || '',
+        0,
+        0,
+        0,
+        'USD',
+        '', // Total (CAD) - will be filled with formula
+        account.institution_name || '',
+      ]);
+      return;
+    }
     
     // Create a row for each currency
     Object.keys(byCurrency).forEach((currencyCode) => {
@@ -1311,11 +1366,12 @@ function updateAccountHistoryOnce(accounts, holdingsMap) {
     // Set all formulas at once
     sheet.getRange(startRow, 8, rows.length, 1).setFormulasR1C1(totalCADFormulas);
     
-    // Format currency columns (Cash, Holdings Value, Total Value, Total (CAD)) - optimized with RangeList
+    // Format currency columns (Cash, Holdings Value, Total Value, Total (CAD))
     const currencyFormat = CONFIG.SHEETS.CURRENCY_FORMAT;
     const currencyCols = CONFIG.SHEETS.COLUMNS.HISTORY.CURRENCY_COLS;
-    const ranges = currencyCols.map(col => sheet.getRange(startRow, col, rows.length, 1));
-    sheet.getRangeList(ranges).setNumberFormat(currencyFormat);
+    currencyCols.forEach(col => {
+      sheet.getRange(startRow, col, rows.length, 1).setNumberFormat(currencyFormat);
+    });
     
     // Format timestamp column to show only date
     sheet.getRange(startRow, 1, rows.length, 1).setNumberFormat(CONFIG.SHEETS.DATE_FORMAT);
