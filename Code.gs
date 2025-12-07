@@ -482,7 +482,7 @@ function calculateBalanceByCurrency(holdings) {
   // Try both 'account_balances' and 'balances' field names
   const balancesArray = holdings.account_balances || holdings.balances;
   
-  if (balancesArray) {
+  if (balancesArray && Array.isArray(balancesArray)) {
     balancesArray.forEach((balance) => {
       const currencyCode = (balance.currency && balance.currency.code) || 'USD';
       if (!byCurrency[currencyCode]) {
@@ -501,6 +501,16 @@ function calculateBalanceByCurrency(holdings) {
         Logger.log(`Found non-zero balance in ${balance.total ? 'total' : 'available'} field for currency ${currencyCode}`);
       }
     });
+  } else if (balancesArray && !Array.isArray(balancesArray)) {
+    // If balances is an object (not array), treat it as a single balance
+    Logger.log(`balances is an object, not an array: ${JSON.stringify(balancesArray)}`);
+    const balance = balancesArray;
+    const currencyCode = (balance.currency && balance.currency.code) || 'USD';
+    if (!byCurrency[currencyCode]) {
+      byCurrency[currencyCode] = { cash: 0, holdingsValue: 0 };
+    }
+    const cashAmount = balance.cash || balance.total || balance.available || 0;
+    byCurrency[currencyCode].cash += cashAmount;
   }
   
   // Add holdings value
