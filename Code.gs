@@ -1246,10 +1246,14 @@ function refreshAccounts() {
     clearToast();
     
     SpreadsheetApp.getUi().alert(`Refreshed ${rows.length} account balances from ${accounts.length} accounts.`);
+    
+    // Clear toast again after alert to ensure no residual toast appears
+    clearToast();
   } catch (error) {
     clearToast();
     SpreadsheetApp.getUi().alert(`Error refreshing accounts: ${error.message}`);
     Logger.log(`refreshAccounts error: ${error.message}`);
+    clearToast();
   }
 }
 
