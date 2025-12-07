@@ -18,9 +18,10 @@ function showApiKeyDialog() {
  * @param {string} consumerKey
  */
 function saveApiKeys(clientId, consumerKey) {
+  validateApiCredentials(clientId, consumerKey);
   PropertiesService.getScriptProperties().setProperties({
-    SNAPTRADE_CLIENT_ID: clientId,
-    SNAPTRADE_CONSUMER_KEY: consumerKey,
+    SNAPTRADE_CLIENT_ID: clientId.trim(),
+    SNAPTRADE_CONSUMER_KEY: consumerKey.trim(),
   });
 }
 

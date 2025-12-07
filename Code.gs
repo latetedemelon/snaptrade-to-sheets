@@ -4,6 +4,40 @@
  */
 
 /**
+ * Application constants and configuration
+ */
+const CONFIG = {
+  SHEETS: {
+    CURRENCY_FORMAT: '$#,##0.00',
+    DATE_FORMAT: 'yyyy-mm-dd',
+    TIMESTAMP_FORMAT: 'yyyy-mm-dd HH:mm:ss',
+    COLUMNS: {
+      ACCOUNTS: {
+        CURRENCY_COLS: [4, 5, 6, 8], // Cash, Holdings Value, Total Value, Total (CAD)
+      },
+      HISTORY: {
+        CURRENCY_COLS: [4, 5, 6, 8], // Cash, Holdings Value, Total Value, Total (CAD)
+      }
+    }
+  },
+  API: {
+    MAX_RETRIES: 3,
+    INITIAL_RETRY_DELAY_MS: 1000,
+    BASE_URL: 'https://api.snaptrade.com',
+  },
+  VALIDATION: {
+    MIN_CLIENT_ID_LENGTH: 10,
+    MIN_CONSUMER_KEY_LENGTH: 20,
+  },
+  CACHE: {
+    SIDEBAR_TTL_SECONDS: 300, // 5 minutes
+  },
+  HISTORY: {
+    DATA_RETENTION_DAYS: 90,
+  }
+};
+
+/**
  * Generates HMAC-SHA256 signature for SnapTrade API requests.
  * @param {string} consumerKey - SnapTrade consumer key (secret)
  * @param {Object|null} requestBody - Request body object, or null for GET requests
@@ -228,16 +262,89 @@ function fetchAccountDataInParallel(accounts, endpointSuffix) {
 }
 
 /**
+ * Validates user ID format
+ * @param {string} userId
+ * @returns {string} Trimmed and validated user ID
+ * @throws {Error} If validation fails
+ */
+function validateUserId(userId) {
+  if (!userId || typeof userId !== 'string') {
+    throw new Error('User ID must be a non-empty string');
+  }
+  
+  const trimmed = userId.trim();
+  
+  if (trimmed.length === 0) {
+    throw new Error('User ID cannot be empty');
+  }
+  
+  if (trimmed.length > 255) {
+    throw new Error('User ID cannot exceed 255 characters');
+  }
+  
+  return trimmed;
+}
+
+/**
+ * Validates date format (YYYY-MM-DD)
+ * @param {string} dateStr
+ * @returns {string} Validated date string
+ * @throws {Error} If validation fails
+ */
+function validateDateFormat(dateStr) {
+  if (!dateStr || typeof dateStr !== 'string') {
+    throw new Error('Date must be a non-empty string');
+  }
+  
+  const iso8601Pattern = /^\d{4}-\d{2}-\d{2}$/;
+  if (!iso8601Pattern.test(dateStr)) {
+    throw new Error(`Invalid date format: "${dateStr}". Expected YYYY-MM-DD`);
+  }
+  
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) {
+    throw new Error(`Invalid date: "${dateStr}"`);
+  }
+  
+  return dateStr;
+}
+
+/**
+ * Validates API credentials
+ * @param {string} clientId
+ * @param {string} consumerKey
+ * @throws {Error} If validation fails
+ */
+function validateApiCredentials(clientId, consumerKey) {
+  if (!clientId || typeof clientId !== 'string' || clientId.trim().length === 0) {
+    throw new Error('Client ID is required and must be a non-empty string');
+  }
+  
+  if (!consumerKey || typeof consumerKey !== 'string' || consumerKey.trim().length === 0) {
+    throw new Error('Consumer Key is required and must be a non-empty string');
+  }
+  
+  if (clientId.trim().length < CONFIG.VALIDATION.MIN_CLIENT_ID_LENGTH) {
+    throw new Error('Client ID appears to be too short. Please check your credentials.');
+  }
+  
+  if (consumerKey.trim().length < CONFIG.VALIDATION.MIN_CONSUMER_KEY_LENGTH) {
+    throw new Error('Consumer Key appears to be too short. Please check your credentials.');
+  }
+}
+
+/**
  * Registers a new SnapTrade user and stores credentials in User Properties.
  * @param {string} userId
  * @returns {{userId: string, userSecret: string}}
  */
 function registerSnapTradeUser(userId) {
+  const validatedUserId = validateUserId(userId);
   const context = getSnapTradeContext();
   const timestamp = Math.floor(Date.now() / 1000).toString();
   const requestPath = '/api/v1/snapTrade/registerUser';
   const queryString = buildSortedQuery({ clientId: context.clientId, timestamp: timestamp });
-  const requestBody = { userId: userId };
+  const requestBody = { userId: validatedUserId };
 
   const signature = generateSnapTradeSignature(context.consumerKey, requestBody, requestPath, queryString);
   const options = {
@@ -324,18 +431,137 @@ function listUserAccounts() {
 }
 
 /**
+ * Generates the CAD conversion formula for use in sheets.
+ * Column structure: ... | Total Value (RC[-2]) | Currency (RC[-1]) | Total (CAD) |
+ * @returns {string} R1C1 formula for CAD conversion
+ */
+function getCADConversionFormula() {
+  return '=IF(RC[-1]="CAD", RC[-2], IF(RC[-1]="", RC[-2], RC[-2] * GOOGLEFINANCE("CURRENCY:" & RC[-1] & "CAD")))';
+}
+
+/**
+ * Shows a temporary toast notification
+ * @param {string} message
+ * @param {string} title
+ * @param {number} timeoutSeconds - -1 for persistent
+ */
+function showToast(message, title, timeoutSeconds) {
+  title = title || 'SnapTrade';
+  timeoutSeconds = timeoutSeconds !== undefined ? timeoutSeconds : 3;
+  SpreadsheetApp.getActiveSpreadsheet().toast(message, title, timeoutSeconds);
+}
+
+/**
+ * Clears any showing toast
+ */
+function clearToast() {
+  SpreadsheetApp.getActiveSpreadsheet().toast('', '', 1);
+}
+
+
+/**
+ * Calculates balance by currency from holdings data.
+ * @param {Object} holdings - Holdings object from API
+ * @returns {Object} Map of currency code to {cash, holdingsValue}
+ */
+function calculateBalanceByCurrency(holdings) {
+  const byCurrency = {};
+  
+  if (!holdings) return byCurrency;
+  
+  // Add cash balances
+  if (holdings.account_balances) {
+    holdings.account_balances.forEach((balance) => {
+      const currencyCode = (balance.currency && balance.currency.code) || 'USD';
+      if (!byCurrency[currencyCode]) {
+        byCurrency[currencyCode] = { cash: 0, holdingsValue: 0 };
+      }
+      byCurrency[currencyCode].cash += balance.cash || 0;
+    });
+  }
+  
+  // Add holdings value
+  if (holdings.positions) {
+    holdings.positions.forEach((position) => {
+      const currencyCode = (position.currency && position.currency.code) || 'USD';
+      if (!byCurrency[currencyCode]) {
+        byCurrency[currencyCode] = { cash: 0, holdingsValue: 0 };
+      }
+      const units = position.units || 0;
+      const price = position.price || 0;
+      byCurrency[currencyCode].holdingsValue += units * price;
+    });
+  }
+  
+  return byCurrency;
+}
+
+/**
+ * Calculates total balance across all currencies from holdings data.
+ * @param {Object} holdings - Holdings object from API
+ * @returns {number} Total balance
+ */
+function calculateTotalBalance(holdings) {
+  const byCurrency = calculateBalanceByCurrency(holdings);
+  
+  let total = 0;
+  Object.keys(byCurrency).forEach((currency) => {
+    total += byCurrency[currency].cash + byCurrency[currency].holdingsValue;
+  });
+  
+  return total;
+}
+
+/**
  * Returns data prepared for sidebar rendering.
  * @returns {Array<{name: string, institution: string, balance: number, status: string}>}
  */
 function getAccountsForSidebar() {
   try {
+    // Try cache first
+    const cache = CacheService.getUserCache();
+    const cacheKey = 'sidebar_accounts_v1';
+    const cached = cache.get(cacheKey);
+    
+    if (cached) {
+      Logger.log('Returning cached sidebar data');
+      return JSON.parse(cached);
+    }
+    
+    Logger.log('Fetching fresh sidebar data');
     const accounts = listUserAccounts();
-    return accounts.map((account) => ({
-      name: account.name || account.number,
-      institution: account.institution_name || 'Unknown',
-      balance: (account.balance && account.balance.total && account.balance.total.amount) || 0,
-      status: account.sync_status || 'Connected',
-    }));
+    
+    // Fetch holdings for all accounts in parallel to get accurate balance data
+    const holdingsMap = fetchAccountDataInParallel(accounts, 'holdings');
+    
+    const result = accounts.map((account) => {
+      // Extract meaningful status from sync_status object
+      let status = 'Connected';
+      if (account.sync_status) {
+        if (account.sync_status.holdings && account.sync_status.holdings.status) {
+          status = account.sync_status.holdings.status;
+        } else if (account.sync_status.initial_sync_completed === false) {
+          status = 'Syncing';
+        } else if (account.sync_status.initial_sync_completed === true) {
+          status = 'Connected';
+        }
+      }
+      
+      // Calculate total balance using helper function
+      const totalBalance = calculateTotalBalance(holdingsMap[account.id]);
+      
+      return {
+        name: account.name || account.number,
+        institution: account.institution_name || 'Unknown',
+        balance: totalBalance,
+        status: status,
+      };
+    });
+    
+    // Cache for 5 minutes
+    cache.put(cacheKey, JSON.stringify(result), CONFIG.CACHE.SIDEBAR_TTL_SECONDS);
+    
+    return result;
   } catch (error) {
     Logger.log(`getAccountsForSidebar error: ${error.message}`);
     return { error: error.message };
@@ -852,6 +1078,7 @@ function refreshHoldings() {
  */
 function refreshAccounts() {
   try {
+    showToast('Fetching accounts...', 'SnapTrade', -1);
     const accounts = snapTradeRequest('GET', '/api/v1/accounts', {}, null);
     const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
     const sheet = spreadsheet.getSheetByName('Accounts') || spreadsheet.insertSheet('Accounts');
@@ -872,9 +1099,11 @@ function refreshAccounts() {
 
     const rows = [];
     
+    showToast(`Fetching holdings for ${accounts.length} accounts...`, 'SnapTrade', -1);
     // Fetch holdings for all accounts in parallel
     const holdingsMap = fetchAccountDataInParallel(accounts, 'holdings');
     
+    showToast('Processing data...', 'SnapTrade', -1);
     // Fetch holdings for each account to calculate complete picture
     accounts.forEach((account) => {
       const holdings = holdingsMap[account.id];
@@ -898,32 +1127,8 @@ function refreshAccounts() {
         return;
       }
       
-      // Group cash and holdings by currency
-      const byCurrency = {};
-      
-      // Add cash balances
-      if (holdings.account_balances) {
-        holdings.account_balances.forEach((balance) => {
-          const currencyCode = (balance.currency && balance.currency.code) || 'USD';
-          if (!byCurrency[currencyCode]) {
-            byCurrency[currencyCode] = { cash: 0, holdingsValue: 0 };
-          }
-          byCurrency[currencyCode].cash += balance.cash || 0;
-        });
-      }
-      
-      // Add holdings value
-      if (holdings.positions) {
-        holdings.positions.forEach((position) => {
-          const currencyCode = (position.currency && position.currency.code) || 'USD';
-          if (!byCurrency[currencyCode]) {
-            byCurrency[currencyCode] = { cash: 0, holdingsValue: 0 };
-          }
-          const units = position.units || 0;
-          const price = position.price || 0;
-          byCurrency[currencyCode].holdingsValue += units * price;
-        });
-      }
+      // Use helper function to calculate balance by currency
+      const byCurrency = calculateBalanceByCurrency(holdings);
       
       // Create a row for each currency
       Object.keys(byCurrency).forEach((currencyCode) => {
@@ -949,23 +1154,18 @@ function refreshAccounts() {
     if (rows.length > 0) {
       sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
       
-      // Add formulas for CAD conversion using R1C1 notation for batch operations
-      // Column G is Currency (col 7), F is Total Value (col 6)
-      const totalCADFormulas = [];
-      
-      for (let i = 0; i < rows.length; i++) {
-        // Using R1C1 notation: RC[x] means same row, column offset by x
-        totalCADFormulas.push([`=IF(RC[-1]="CAD", RC[-2], IF(RC[-1]="", RC[-2], RC[-2] * GOOGLEFINANCE("CURRENCY:" & RC[-1] & "CAD")))`]);
-      }
+      // Add formulas for CAD conversion using helper function
+      const cadFormula = getCADConversionFormula();
+      const totalCADFormulas = Array.from({length: rows.length}, () => [cadFormula]);
       
       // Set all formulas at once
       sheet.getRange(2, 8, rows.length, 1).setFormulasR1C1(totalCADFormulas);
       
-      // Format currency columns (Cash, Holdings Value, Total Value, Total (CAD))
-      sheet.getRange(2, 4, rows.length, 1).setNumberFormat('$#,##0.00');
-      sheet.getRange(2, 5, rows.length, 1).setNumberFormat('$#,##0.00');
-      sheet.getRange(2, 6, rows.length, 1).setNumberFormat('$#,##0.00');
-      sheet.getRange(2, 8, rows.length, 1).setNumberFormat('$#,##0.00');
+      // Format currency columns (Cash, Holdings Value, Total Value, Total (CAD)) - optimized with RangeList
+      const currencyFormat = CONFIG.SHEETS.CURRENCY_FORMAT;
+      const currencyCols = CONFIG.SHEETS.COLUMNS.ACCOUNTS.CURRENCY_COLS;
+      const ranges = currencyCols.map(col => sheet.getRange(2, col, rows.length, 1));
+      sheet.getRangeList(ranges).setNumberFormat(currencyFormat);
     }
     
     // Format header row
@@ -982,8 +1182,10 @@ function refreshAccounts() {
     // Automatically update account history (once per day) - pass the already-fetched holdings
     updateAccountHistoryOnce(accounts, holdingsMap);
     
+    clearToast();
     SpreadsheetApp.getUi().alert(`Refreshed ${rows.length} account balances from ${accounts.length} accounts.`);
   } catch (error) {
+    clearToast();
     SpreadsheetApp.getUi().alert(`Error refreshing accounts: ${error.message}`);
     Logger.log(`refreshAccounts error: ${error.message}`);
   }
@@ -1064,32 +1266,8 @@ function updateAccountHistoryOnce(accounts, holdingsMap) {
       return;
     }
     
-    // Group cash and holdings by currency
-    const byCurrency = {};
-    
-    // Add cash balances
-    if (holdings.account_balances) {
-      holdings.account_balances.forEach((balance) => {
-        const currencyCode = (balance.currency && balance.currency.code) || 'USD';
-        if (!byCurrency[currencyCode]) {
-          byCurrency[currencyCode] = { cash: 0, holdingsValue: 0 };
-        }
-        byCurrency[currencyCode].cash += balance.cash || 0;
-      });
-    }
-    
-    // Add holdings value
-    if (holdings.positions) {
-      holdings.positions.forEach((position) => {
-        const currencyCode = (position.currency && position.currency.code) || 'USD';
-        if (!byCurrency[currencyCode]) {
-          byCurrency[currencyCode] = { cash: 0, holdingsValue: 0 };
-        }
-        const units = position.units || 0;
-        const price = position.price || 0;
-        byCurrency[currencyCode].holdingsValue += units * price;
-      });
-    }
+    // Use helper function to calculate balance by currency
+    const byCurrency = calculateBalanceByCurrency(holdings);
     
     // Create a row for each currency
     Object.keys(byCurrency).forEach((currencyCode) => {
@@ -1126,26 +1304,21 @@ function updateAccountHistoryOnce(accounts, holdingsMap) {
     
     sheet.getRange(startRow, 1, rows.length, rows[0].length).setValues(rows);
     
-    // Add formulas for CAD conversion using R1C1 notation for batch operations
-    // Column G is Currency (col 7), F is Total Value (col 6)
-    const totalCADFormulas = [];
-    
-    for (let i = 0; i < rows.length; i++) {
-      // Using R1C1 notation: RC[x] means same row, column offset by x
-      totalCADFormulas.push([`=IF(RC[-1]="CAD", RC[-2], IF(RC[-1]="", RC[-2], RC[-2] * GOOGLEFINANCE("CURRENCY:" & RC[-1] & "CAD")))`]);
-    }
+    // Add formulas for CAD conversion using helper function
+    const cadFormula = getCADConversionFormula();
+    const totalCADFormulas = Array.from({length: rows.length}, () => [cadFormula]);
     
     // Set all formulas at once
     sheet.getRange(startRow, 8, rows.length, 1).setFormulasR1C1(totalCADFormulas);
     
-    // Format currency columns (Cash, Holdings Value, Total Value, Total (CAD))
-    sheet.getRange(startRow, 4, rows.length, 1).setNumberFormat('$#,##0.00');
-    sheet.getRange(startRow, 5, rows.length, 1).setNumberFormat('$#,##0.00');
-    sheet.getRange(startRow, 6, rows.length, 1).setNumberFormat('$#,##0.00');
-    sheet.getRange(startRow, 8, rows.length, 1).setNumberFormat('$#,##0.00');
+    // Format currency columns (Cash, Holdings Value, Total Value, Total (CAD)) - optimized with RangeList
+    const currencyFormat = CONFIG.SHEETS.CURRENCY_FORMAT;
+    const currencyCols = CONFIG.SHEETS.COLUMNS.HISTORY.CURRENCY_COLS;
+    const ranges = currencyCols.map(col => sheet.getRange(startRow, col, rows.length, 1));
+    sheet.getRangeList(ranges).setNumberFormat(currencyFormat);
     
     // Format timestamp column to show only date
-    sheet.getRange(startRow, 1, rows.length, 1).setNumberFormat('yyyy-mm-dd');
+    sheet.getRange(startRow, 1, rows.length, 1).setNumberFormat(CONFIG.SHEETS.DATE_FORMAT);
   }
   
   // Auto-resize columns (9 columns: Timestamp, Account Name, Account ID, Cash, Holdings Value, Total Value, Currency, Total (CAD), Institution)
@@ -1160,8 +1333,17 @@ function updateAccountHistoryOnce(accounts, holdingsMap) {
 function refreshTransactions(startDate, endDate) {
   try {
     const params = {};
-    if (startDate) params.startDate = startDate;
-    if (endDate) params.endDate = endDate;
+    if (startDate) {
+      params.startDate = validateDateFormat(startDate);
+    }
+    if (endDate) {
+      params.endDate = validateDateFormat(endDate);
+    }
+    
+    // Ensure end >= start if both provided
+    if (params.startDate && params.endDate && new Date(params.endDate) < new Date(params.startDate)) {
+      throw new Error('End date must be on or after start date');
+    }
 
     const transactions = snapTradeRequest('GET', '/api/v1/activities', params, null);
     const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
