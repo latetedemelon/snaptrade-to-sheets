@@ -1234,9 +1234,6 @@ function refreshAccounts() {
     sheet.hideColumns(9, 1); // Hide Last Update (column 9)
     sheet.hideColumns(10, 1); // Hide Raw Data (column 10)
     
-    // Show completion toast to replace the infinite "Processing data..." toast
-    showToast('Accounts refreshed successfully!', 'SnapTrade', 2);
-    
     // Automatically update account history (once per day) - pass the already-fetched holdings
     try {
       updateAccountHistoryOnce(accounts, holdingsMap);
@@ -1244,6 +1241,13 @@ function refreshAccounts() {
       Logger.log(`Error updating account history: ${historyError.message}`);
       // Continue execution - history update failure shouldn't prevent accounts refresh
     }
+    
+    // Clear any persistent toast and show brief success message
+    clearToast();
+    showToast('Accounts refreshed successfully!', 'SnapTrade', 1);
+    
+    // Small delay to ensure toast displays before alert
+    Utilities.sleep(500);
     
     SpreadsheetApp.getUi().alert(`Refreshed ${rows.length} account balances from ${accounts.length} accounts.`);
   } catch (error) {
