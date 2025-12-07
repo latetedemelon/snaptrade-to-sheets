@@ -1117,11 +1117,6 @@ function refreshAccounts() {
       
       // Use helper function to calculate balance by currency
       const byCurrency = calculateBalanceByCurrency(holdings);
-          const units = position.units || 0;
-          const price = position.price || 0;
-          byCurrency[currencyCode].holdingsValue += units * price;
-        });
-      }
       
       // Create a row for each currency
       Object.keys(byCurrency).forEach((currencyCode) => {
@@ -1154,11 +1149,10 @@ function refreshAccounts() {
       // Set all formulas at once
       sheet.getRange(2, 8, rows.length, 1).setFormulasR1C1(totalCADFormulas);
       
-      // Format currency columns (Cash, Holdings Value, Total Value, Total (CAD)) - optimized
+      // Format currency columns (Cash, Holdings Value, Total Value, Total (CAD)) - optimized with RangeList
       const currencyFormat = CONFIG.SHEETS.CURRENCY_FORMAT;
-      [4, 5, 6, 8].forEach(col => {
-        sheet.getRange(2, col, rows.length, 1).setNumberFormat(currencyFormat);
-      });
+      const ranges = [4, 5, 6, 8].map(col => sheet.getRange(2, col, rows.length, 1));
+      sheet.getRangeList(ranges).setNumberFormat(currencyFormat);
     }
     
     // Format header row
@@ -1304,11 +1298,10 @@ function updateAccountHistoryOnce(accounts, holdingsMap) {
     // Set all formulas at once
     sheet.getRange(startRow, 8, rows.length, 1).setFormulasR1C1(totalCADFormulas);
     
-    // Format currency columns (Cash, Holdings Value, Total Value, Total (CAD)) - optimized
+    // Format currency columns (Cash, Holdings Value, Total Value, Total (CAD)) - optimized with RangeList
     const currencyFormat = CONFIG.SHEETS.CURRENCY_FORMAT;
-    [4, 5, 6, 8].forEach(col => {
-      sheet.getRange(startRow, col, rows.length, 1).setNumberFormat(currencyFormat);
-    });
+    const ranges = [4, 5, 6, 8].map(col => sheet.getRange(startRow, col, rows.length, 1));
+    sheet.getRangeList(ranges).setNumberFormat(currencyFormat);
     
     // Format timestamp column to show only date
     sheet.getRange(startRow, 1, rows.length, 1).setNumberFormat(CONFIG.SHEETS.DATE_FORMAT);
