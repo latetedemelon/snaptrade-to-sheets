@@ -11,11 +11,23 @@ const CONFIG = {
     CURRENCY_FORMAT: '$#,##0.00',
     DATE_FORMAT: 'yyyy-mm-dd',
     TIMESTAMP_FORMAT: 'yyyy-mm-dd HH:mm:ss',
+    COLUMNS: {
+      ACCOUNTS: {
+        CURRENCY_COLS: [4, 5, 6, 8], // Cash, Holdings Value, Total Value, Total (CAD)
+      },
+      HISTORY: {
+        CURRENCY_COLS: [4, 5, 6, 8], // Cash, Holdings Value, Total Value, Total (CAD)
+      }
+    }
   },
   API: {
     MAX_RETRIES: 3,
     INITIAL_RETRY_DELAY_MS: 1000,
     BASE_URL: 'https://api.snaptrade.com',
+  },
+  VALIDATION: {
+    MIN_CLIENT_ID_LENGTH: 10,
+    MIN_CONSUMER_KEY_LENGTH: 20,
   },
   CACHE: {
     SIDEBAR_TTL_SECONDS: 300, // 5 minutes
@@ -312,11 +324,11 @@ function validateApiCredentials(clientId, consumerKey) {
     throw new Error('Consumer Key is required and must be a non-empty string');
   }
   
-  if (clientId.trim().length < 10) {
+  if (clientId.trim().length < CONFIG.VALIDATION.MIN_CLIENT_ID_LENGTH) {
     throw new Error('Client ID appears to be too short. Please check your credentials.');
   }
   
-  if (consumerKey.trim().length < 20) {
+  if (consumerKey.trim().length < CONFIG.VALIDATION.MIN_CONSUMER_KEY_LENGTH) {
     throw new Error('Consumer Key appears to be too short. Please check your credentials.');
   }
 }
@@ -1144,14 +1156,15 @@ function refreshAccounts() {
       
       // Add formulas for CAD conversion using helper function
       const cadFormula = getCADConversionFormula();
-      const totalCADFormulas = Array(rows.length).fill([cadFormula]);
+      const totalCADFormulas = Array.from({length: rows.length}, () => [cadFormula]);
       
       // Set all formulas at once
       sheet.getRange(2, 8, rows.length, 1).setFormulasR1C1(totalCADFormulas);
       
       // Format currency columns (Cash, Holdings Value, Total Value, Total (CAD)) - optimized with RangeList
       const currencyFormat = CONFIG.SHEETS.CURRENCY_FORMAT;
-      const ranges = [4, 5, 6, 8].map(col => sheet.getRange(2, col, rows.length, 1));
+      const currencyCols = CONFIG.SHEETS.COLUMNS.ACCOUNTS.CURRENCY_COLS;
+      const ranges = currencyCols.map(col => sheet.getRange(2, col, rows.length, 1));
       sheet.getRangeList(ranges).setNumberFormat(currencyFormat);
     }
     
@@ -1293,14 +1306,15 @@ function updateAccountHistoryOnce(accounts, holdingsMap) {
     
     // Add formulas for CAD conversion using helper function
     const cadFormula = getCADConversionFormula();
-    const totalCADFormulas = Array(rows.length).fill([cadFormula]);
+    const totalCADFormulas = Array.from({length: rows.length}, () => [cadFormula]);
     
     // Set all formulas at once
     sheet.getRange(startRow, 8, rows.length, 1).setFormulasR1C1(totalCADFormulas);
     
     // Format currency columns (Cash, Holdings Value, Total Value, Total (CAD)) - optimized with RangeList
     const currencyFormat = CONFIG.SHEETS.CURRENCY_FORMAT;
-    const ranges = [4, 5, 6, 8].map(col => sheet.getRange(startRow, col, rows.length, 1));
+    const currencyCols = CONFIG.SHEETS.COLUMNS.HISTORY.CURRENCY_COLS;
+    const ranges = currencyCols.map(col => sheet.getRange(startRow, col, rows.length, 1));
     sheet.getRangeList(ranges).setNumberFormat(currencyFormat);
     
     // Format timestamp column to show only date
