@@ -469,17 +469,8 @@ function calculateBalanceByCurrency(holdings) {
   
   if (!holdings) return byCurrency;
   
-  // Log the entire holdings structure to understand what fields are available
-  Logger.log(`Holdings object keys: ${Object.keys(holdings).join(', ')}`);
-  if (holdings.account_balances) {
-    Logger.log(`account_balances exists with ${holdings.account_balances.length} items`);
-  }
-  if (holdings.balances) {
-    Logger.log(`balances exists with ${holdings.balances.length} items`);
-  }
-  
   // Add cash balances
-  // Try both 'account_balances' and 'balances' field names
+  // Try both 'account_balances' and 'balances' field names (API uses 'balances')
   const balancesArray = holdings.account_balances || holdings.balances;
   
   if (balancesArray && Array.isArray(balancesArray)) {
@@ -489,21 +480,12 @@ function calculateBalanceByCurrency(holdings) {
         byCurrency[currencyCode] = { cash: 0, holdingsValue: 0 };
       }
       
-      // Log balance structure to debug cash field issues
-      Logger.log(`Balance object for ${currencyCode}: ${JSON.stringify(balance)}`);
-      
       // Try to get cash from multiple possible fields
       const cashAmount = balance.cash || balance.total || balance.available || 0;
       byCurrency[currencyCode].cash += cashAmount;
-      
-      // Log if we found a balance but no cash field
-      if (cashAmount > 0 && !balance.cash) {
-        Logger.log(`Found non-zero balance in ${balance.total ? 'total' : 'available'} field for currency ${currencyCode}`);
-      }
     });
   } else if (balancesArray && !Array.isArray(balancesArray)) {
     // If balances is an object (not array), treat it as a single balance
-    Logger.log(`balances is an object, not an array: ${JSON.stringify(balancesArray)}`);
     const balance = balancesArray;
     const currencyCode = (balance.currency && balance.currency.code) || 'USD';
     if (!byCurrency[currencyCode]) {
