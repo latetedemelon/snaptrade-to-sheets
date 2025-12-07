@@ -681,14 +681,14 @@ function refreshHoldings() {
       'Description',
       'Quantity',
       'Price',
-      'Price (CAD)',
-      'Market Value',
-      'Market Value (CAD)',
-      'Cost Basis',
-      'Cost Basis (CAD)',
-      'Gain/Loss',
-      'Gain/Loss (CAD)',
       'Currency',
+      'Market Value',
+      'Cost Basis',
+      'Gain/Loss',
+      'Price (CAD)',
+      'Market Value (CAD)',
+      'Cost Basis (CAD)',
+      'Gain/Loss (CAD)',
     ]);
 
     const rows = [];
@@ -758,14 +758,14 @@ function refreshHoldings() {
             description,
             units,
             price,
-            '', // Price (CAD) - will be filled with formula
-            marketValue,
-            '', // Market Value (CAD) - will be filled with formula
-            costBasis,
-            '', // Cost Basis (CAD) - will be filled with formula
-            marketValue - costBasis,
-            '', // Gain/Loss (CAD) - will be filled with formula
             currency,
+            marketValue,
+            costBasis,
+            marketValue - costBasis,
+            '', // Price (CAD) - will be filled with formula
+            '', // Market Value (CAD) - will be filled with formula
+            '', // Cost Basis (CAD) - will be filled with formula
+            '', // Gain/Loss (CAD) - will be filled with formula
           ]);
         });
       } else {
@@ -784,7 +784,8 @@ function refreshHoldings() {
       sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
       
       // Add formulas for CAD conversion using R1C1 notation for batch operations
-      // Column M is Currency (col 13), E is Price (col 5), G is Market Value (col 7), I is Cost Basis (col 9), K is Gain/Loss (col 11)
+      // Column F is Currency (col 6), E is Price (col 5), G is Market Value (col 7), H is Cost Basis (col 8), I is Gain/Loss (col 9)
+      // CAD columns: J (10), K (11), L (12), M (13)
       
       // Build formula arrays for batch insertion
       const priceCADFormulas = [];
@@ -796,31 +797,35 @@ function refreshHoldings() {
         const rowNum = i + 2; // Data starts at row 2
         
         // Using R1C1 notation: RC[x] means same row, column offset by x
-        priceCADFormulas.push([`=IF(RC[7]="CAD", RC[-1], IF(RC[7]="", RC[-1], RC[-1] * GOOGLEFINANCE("CURRENCY:" & RC[7] & "CAD")))`]);
-        marketValueCADFormulas.push([`=IF(RC[5]="CAD", RC[-1], IF(RC[5]="", RC[-1], RC[-1] * GOOGLEFINANCE("CURRENCY:" & RC[5] & "CAD")))`]);
-        costBasisCADFormulas.push([`=IF(RC[3]="CAD", RC[-1], IF(RC[3]="", RC[-1], RC[-1] * GOOGLEFINANCE("CURRENCY:" & RC[3] & "CAD")))`]);
-        gainLossCADFormulas.push([`=IF(RC[1]="CAD", RC[-1], IF(RC[1]="", RC[-1], RC[-1] * GOOGLEFINANCE("CURRENCY:" & RC[1] & "CAD")))`]);
+        // Price (CAD) in col 10: references Currency (col 6, offset -4) and Price (col 5, offset -5)
+        priceCADFormulas.push([`=IF(RC[-4]="CAD", RC[-5], IF(RC[-4]="", RC[-5], RC[-5] * GOOGLEFINANCE("CURRENCY:" & RC[-4] & "CAD")))`]);
+        // Market Value (CAD) in col 11: references Currency (col 6, offset -5) and Market Value (col 7, offset -4)
+        marketValueCADFormulas.push([`=IF(RC[-5]="CAD", RC[-4], IF(RC[-5]="", RC[-4], RC[-4] * GOOGLEFINANCE("CURRENCY:" & RC[-5] & "CAD")))`]);
+        // Cost Basis (CAD) in col 12: references Currency (col 6, offset -6) and Cost Basis (col 8, offset -4)
+        costBasisCADFormulas.push([`=IF(RC[-6]="CAD", RC[-4], IF(RC[-6]="", RC[-4], RC[-4] * GOOGLEFINANCE("CURRENCY:" & RC[-6] & "CAD")))`]);
+        // Gain/Loss (CAD) in col 13: references Currency (col 6, offset -7) and Gain/Loss (col 9, offset -4)
+        gainLossCADFormulas.push([`=IF(RC[-7]="CAD", RC[-4], IF(RC[-7]="", RC[-4], RC[-4] * GOOGLEFINANCE("CURRENCY:" & RC[-7] & "CAD")))`]);
       }
       
       // Set all formulas at once
-      sheet.getRange(2, 6, rows.length, 1).setFormulasR1C1(priceCADFormulas);
-      sheet.getRange(2, 8, rows.length, 1).setFormulasR1C1(marketValueCADFormulas);
-      sheet.getRange(2, 10, rows.length, 1).setFormulasR1C1(costBasisCADFormulas);
-      sheet.getRange(2, 12, rows.length, 1).setFormulasR1C1(gainLossCADFormulas);
+      sheet.getRange(2, 10, rows.length, 1).setFormulasR1C1(priceCADFormulas);
+      sheet.getRange(2, 11, rows.length, 1).setFormulasR1C1(marketValueCADFormulas);
+      sheet.getRange(2, 12, rows.length, 1).setFormulasR1C1(costBasisCADFormulas);
+      sheet.getRange(2, 13, rows.length, 1).setFormulasR1C1(gainLossCADFormulas);
     }
 
     // Format price and value columns as currency
-    // Original columns: E (Price), G (Market Value), I (Cost Basis), K (Gain/Loss)
-    // CAD columns: F, H, J, L
+    // Original columns: E (Price), G (Market Value), H (Cost Basis), I (Gain/Loss)
+    // CAD columns: J, K, L, M
     if (rows.length > 0) {
       sheet.getRange(2, 5, rows.length, 1).setNumberFormat('$#,##0.00'); // Price
-      sheet.getRange(2, 6, rows.length, 1).setNumberFormat('$#,##0.00'); // Price (CAD)
       sheet.getRange(2, 7, rows.length, 1).setNumberFormat('$#,##0.00'); // Market Value
-      sheet.getRange(2, 8, rows.length, 1).setNumberFormat('$#,##0.00'); // Market Value (CAD)
-      sheet.getRange(2, 9, rows.length, 1).setNumberFormat('$#,##0.00'); // Cost Basis
-      sheet.getRange(2, 10, rows.length, 1).setNumberFormat('$#,##0.00'); // Cost Basis (CAD)
-      sheet.getRange(2, 11, rows.length, 1).setNumberFormat('$#,##0.00'); // Gain/Loss
-      sheet.getRange(2, 12, rows.length, 1).setNumberFormat('$#,##0.00'); // Gain/Loss (CAD)
+      sheet.getRange(2, 8, rows.length, 1).setNumberFormat('$#,##0.00'); // Cost Basis
+      sheet.getRange(2, 9, rows.length, 1).setNumberFormat('$#,##0.00'); // Gain/Loss
+      sheet.getRange(2, 10, rows.length, 1).setNumberFormat('$#,##0.00'); // Price (CAD)
+      sheet.getRange(2, 11, rows.length, 1).setNumberFormat('$#,##0.00'); // Market Value (CAD)
+      sheet.getRange(2, 12, rows.length, 1).setNumberFormat('$#,##0.00'); // Cost Basis (CAD)
+      sheet.getRange(2, 13, rows.length, 1).setNumberFormat('$#,##0.00'); // Gain/Loss (CAD)
     }
     
     // Format header row
@@ -853,6 +858,7 @@ function refreshAccounts() {
 
     sheet.clear();
     sheet.appendRow([
+      'Institution',
       'Account Name',
       'Account ID',
       'Cash',
@@ -861,7 +867,6 @@ function refreshAccounts() {
       'Currency',
       'Total (CAD)',
       'Last Update',
-      'Institution',
       'Raw Data',
     ]);
 
@@ -874,9 +879,22 @@ function refreshAccounts() {
     accounts.forEach((account) => {
       const holdings = holdingsMap[account.id];
       
-      // Skip if holdings is null or undefined
+      // Log if holdings is null or undefined, but still include the account with zero values
       if (!holdings) {
-        Logger.log(`No holdings data returned for account ${account.id}`);
+        Logger.log(`No holdings data returned for account ${account.id} (${account.name || account.number}). Including account with zero values.`);
+        // Create a default USD row with zero values for accounts without holdings data
+        rows.push([
+          account.institution_name || '',
+          account.name || account.number,
+          account.id || '',
+          0,
+          0,
+          0,
+          'USD',
+          '', // Total (CAD) - will be filled with formula
+          (account.sync_status && account.sync_status.holdings && account.sync_status.holdings.last_successful_sync) || '',
+          JSON.stringify(account),
+        ]);
         return;
       }
       
@@ -914,6 +932,7 @@ function refreshAccounts() {
         const totalValue = cash + holdingsValue;
         
         rows.push([
+          account.institution_name || '',
           account.name || account.number,
           account.id || '',
           cash,
@@ -922,7 +941,6 @@ function refreshAccounts() {
           currencyCode,
           '', // Total (CAD) - will be filled with formula
           (account.sync_status && account.sync_status.holdings && account.sync_status.holdings.last_successful_sync) || '',
-          account.institution_name || '',
           JSON.stringify(account),
         ]);
       });
@@ -932,7 +950,7 @@ function refreshAccounts() {
       sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
       
       // Add formulas for CAD conversion using R1C1 notation for batch operations
-      // Column F is Currency (col 6), E is Total Value (col 5)
+      // Column G is Currency (col 7), F is Total Value (col 6)
       const totalCADFormulas = [];
       
       for (let i = 0; i < rows.length; i++) {
@@ -941,13 +959,13 @@ function refreshAccounts() {
       }
       
       // Set all formulas at once
-      sheet.getRange(2, 7, rows.length, 1).setFormulasR1C1(totalCADFormulas);
+      sheet.getRange(2, 8, rows.length, 1).setFormulasR1C1(totalCADFormulas);
       
       // Format currency columns (Cash, Holdings Value, Total Value, Total (CAD))
-      sheet.getRange(2, 3, rows.length, 1).setNumberFormat('$#,##0.00');
       sheet.getRange(2, 4, rows.length, 1).setNumberFormat('$#,##0.00');
       sheet.getRange(2, 5, rows.length, 1).setNumberFormat('$#,##0.00');
-      sheet.getRange(2, 7, rows.length, 1).setNumberFormat('$#,##0.00');
+      sheet.getRange(2, 6, rows.length, 1).setNumberFormat('$#,##0.00');
+      sheet.getRange(2, 8, rows.length, 1).setNumberFormat('$#,##0.00');
     }
     
     // Format header row
@@ -956,8 +974,9 @@ function refreshAccounts() {
     // Auto-resize columns for better readability (excluding Raw Data column which can be very wide)
     sheet.autoResizeColumns(1, 9);
     
-    // Hide Account ID and Raw Data columns by default
-    sheet.hideColumns(2, 1); // Hide Account ID (column 2)
+    // Hide Account ID (column 3), Last Update (column 9), and Raw Data (column 10) by default
+    sheet.hideColumns(3, 1); // Hide Account ID (column 3)
+    sheet.hideColumns(9, 1); // Hide Last Update (column 9)
     sheet.hideColumns(10, 1); // Hide Raw Data (column 10)
     
     // Automatically update account history (once per day) - pass the already-fetched holdings
