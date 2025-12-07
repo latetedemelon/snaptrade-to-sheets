@@ -46,6 +46,10 @@ const CONFIG = {
  * @returns {string} Base64-encoded signature
  */
 function generateSnapTradeSignature(consumerKey, requestBody, requestPath, queryString) {
+  if (!consumerKey) {
+    throw new Error('Consumer Key is not configured. Please configure your API keys via SnapTrade → Settings → Configure API Keys.');
+  }
+  
   const sigObject = {
     content: requestBody,
     path: requestPath,
@@ -95,6 +99,15 @@ function buildSortedQuery(params) {
  */
 function snapTradeRequest(method, path, additionalParams, body) {
   const context = getSnapTradeContext();
+  
+  // Validate that required credentials are configured
+  if (!context.clientId || !context.consumerKey) {
+    throw new Error('SnapTrade API credentials are not configured. Please configure your API keys via SnapTrade → Settings → Configure API Keys.');
+  }
+  if (!context.userId || !context.userSecret) {
+    throw new Error('SnapTrade user is not registered. Please register a user via SnapTrade → Settings → Register User.');
+  }
+  
   const timestamp = Math.floor(Date.now() / 1000).toString();
 
   const params = {
