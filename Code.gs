@@ -1234,6 +1234,10 @@ function refreshAccounts() {
     sheet.hideColumns(9, 1); // Hide Last Update (column 9)
     sheet.hideColumns(10, 1); // Hide Raw Data (column 10)
     
+    // Flush all pending operations to complete before showing alert
+    // This prevents Google Sheets' "working" indicator from persisting
+    SpreadsheetApp.flush();
+    
     // Automatically update account history (once per day) - pass the already-fetched holdings
     try {
       updateAccountHistoryOnce(accounts, holdingsMap);
@@ -1241,6 +1245,9 @@ function refreshAccounts() {
       Logger.log(`Error updating account history: ${historyError.message}`);
       // Continue execution - history update failure shouldn't prevent accounts refresh
     }
+    
+    // Flush again after history update
+    SpreadsheetApp.flush();
     
     // Clear any persistent toast before showing alert
     clearToast();
