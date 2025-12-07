@@ -452,10 +452,10 @@ function showToast(message, title, timeoutSeconds) {
 }
 
 /**
- * Clears any showing toast
+ * Clears any showing toast by showing an empty toast with 0 timeout
  */
 function clearToast() {
-  SpreadsheetApp.getActiveSpreadsheet().toast('', '', 1);
+  SpreadsheetApp.getActiveSpreadsheet().toast('', '', 0);
 }
 
 
@@ -1221,8 +1221,8 @@ function refreshAccounts() {
     sheet.hideColumns(9, 1); // Hide Last Update (column 9)
     sheet.hideColumns(10, 1); // Hide Raw Data (column 10)
     
-    // Clear toast before updating history to ensure it doesn't get stuck
-    clearToast();
+    // Show completion toast to replace the infinite "Processing data..." toast
+    showToast('Accounts refreshed successfully!', 'SnapTrade', 2);
     
     // Automatically update account history (once per day) - pass the already-fetched holdings
     try {
