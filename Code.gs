@@ -1242,12 +1242,8 @@ function refreshAccounts() {
       // Continue execution - history update failure shouldn't prevent accounts refresh
     }
     
-    // Clear any persistent toast and show brief success message
+    // Clear any persistent toast before showing alert
     clearToast();
-    showToast('Accounts refreshed successfully!', 'SnapTrade', 1);
-    
-    // Small delay to ensure toast displays before alert
-    Utilities.sleep(500);
     
     SpreadsheetApp.getUi().alert(`Refreshed ${rows.length} account balances from ${accounts.length} accounts.`);
   } catch (error) {
