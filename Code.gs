@@ -1226,17 +1226,14 @@ function refreshAccounts() {
     // Format header row
     formatSheetHeader(sheet);
     
-    // Auto-resize columns for better readability (excluding Raw Data column which can be very wide)
-    sheet.autoResizeColumns(1, 9);
+    // Note: Removed autoResizeColumns() as it triggers formula evaluation (GOOGLEFINANCE)
+    // which causes Google Sheets' persistent "working" indicator
+    // Users can manually resize columns if needed via Format → Resize columns
     
     // Hide Account ID (column 3), Last Update (column 9), and Raw Data (column 10) by default
     sheet.hideColumns(3, 1); // Hide Account ID (column 3)
     sheet.hideColumns(9, 1); // Hide Last Update (column 9)
     sheet.hideColumns(10, 1); // Hide Raw Data (column 10)
-    
-    // Flush all pending operations to complete before showing alert
-    // This prevents Google Sheets' "working" indicator from persisting
-    SpreadsheetApp.flush();
     
     // Automatically update account history (once per day) - pass the already-fetched holdings
     try {
@@ -1246,7 +1243,7 @@ function refreshAccounts() {
       // Continue execution - history update failure shouldn't prevent accounts refresh
     }
     
-    // Flush again after history update
+    // Flush all pending operations before showing alert
     SpreadsheetApp.flush();
     
     // Clear any persistent toast before showing alert
