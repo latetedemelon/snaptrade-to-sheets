@@ -351,6 +351,88 @@ function testForexCalculations() {
 }
 
 /**
+ * Tests realized-trade leg classification and per-instrument grouping/ordering from a fixed
+ * fixture. No credentials needed. Covers an equity buy/buy/sell and an option open→close→reopen
+ * (roll) sequence, asserting that the rolled option's close emits a CLOSE leg. The running
+ * average-cost / realized-P/L math itself lives in sheet formulas (see writeRealizedLedger).
+ */
+function testRealizedTrades() {
+  const assert = (cond, msg) => { if (!cond) throw new Error(`Assertion failed: ${msg}`); };
+
+  Logger.log('[TEST] Starting realized trades test');
+
+  // 1. Leg classification: opens, closes, expiry/assignment, and units-sign fallback.
+  assert(classifyRealizedLeg({ type: 'BUY' }) === 'OPEN', 'BUY -> OPEN');
+  assert(classifyRealizedLeg({ type: 'SELL' }) === 'CLOSE', 'SELL -> CLOSE');
+  assert(classifyRealizedLeg({ type: 'BUY_TO_OPEN' }) === 'OPEN', 'BUY_TO_OPEN -> OPEN');
+  assert(classifyRealizedLeg({ type: 'SELL_TO_CLOSE' }) === 'CLOSE', 'SELL_TO_CLOSE -> CLOSE');
+  assert(classifyRealizedLeg({ type: 'OPTIONEXPIRATION' }) === 'CLOSE', 'expiry -> CLOSE');
+  assert(classifyRealizedLeg({ type: 'OPTIONASSIGNMENT' }) === 'CLOSE', 'assignment -> CLOSE');
+  assert(classifyRealizedLeg({ type: 'TRADE', units: 5 }) === 'OPEN', 'positive units -> OPEN');
+  assert(classifyRealizedLeg({ type: 'TRADE', units: -5 }) === 'CLOSE', 'negative units -> CLOSE');
+  assert(classifyRealizedLeg({ type: 'DIVIDEND', units: 0 }) === null, 'no-units, non-trade -> null');
+
+  // 2. Build legs from a fixture: an equity buy/buy/sell, an income event (skipped), and an
+  // option roll (open the original contract, close it, open a replacement contract).
+  const sym = (s) => ({ symbol: s, description: s, currency: { code: 'USD' } });
+  const opt = (ticker) => ({ ticker: ticker, option_type: 'CALL', strike_price: 150, expiration_date: '2024-01-19' });
+  const activities = [
+    // Equity round trip (two opens, one close).
+    { type: 'BUY', symbol: sym('AAPL'), units: 100, price: 10, trade_date: '2023-01-10', currency: { code: 'USD' }, account: { name: 'RRSP' } },
+    { type: 'BUY', symbol: sym('AAPL'), units: 50, price: 12, trade_date: '2023-02-01', currency: { code: 'USD' }, account: { name: 'RRSP' } },
+    { type: 'SELL', symbol: sym('AAPL'), units: 80, price: 15, trade_date: '2023-03-01', currency: { code: 'USD' }, account: { name: 'RRSP' } },
+    // Income — neither an equity nor option open/close, must be skipped.
+    { type: 'DIVIDEND', symbol: sym('AAPL'), amount: 25, trade_date: '2023-02-15', currency: { code: 'USD' } },
+    // Option roll: open original, close it (the roll), then open the replacement contract.
+    { type: 'BUY_TO_OPEN', option_symbol: opt('AAPL 240119C00150000'), units: 2, price: 3.5, multiplier: 100, trade_date: '2023-06-01', currency: { code: 'USD' }, account: { name: 'RRSP' } },
+    { type: 'SELL_TO_CLOSE', option_symbol: opt('AAPL 240119C00150000'), units: 2, price: 5.0, multiplier: 100, trade_date: '2023-07-01', currency: { code: 'USD' }, account: { name: 'RRSP' } },
+    { type: 'BUY_TO_OPEN', option_symbol: opt('AAPL 240621C00160000'), units: 2, price: 4.0, multiplier: 100, trade_date: '2023-07-01', currency: { code: 'USD' }, account: { name: 'RRSP' } },
+  ];
+
+  const legs = buildRealizedLegs(activities);
+  // 6 trade legs (3 equity + 3 option); the dividend is dropped.
+  assert(legs.length === 6, `6 legs built (got ${legs.length})`);
+
+  const equityLegs = legs.filter((l) => l.instrumentType === 'Equity');
+  const optionLegs = legs.filter((l) => l.instrumentType === 'Option');
+  assert(equityLegs.length === 3, `3 equity legs (got ${equityLegs.length})`);
+  assert(optionLegs.length === 3, `3 option legs (got ${optionLegs.length})`);
+
+  // Equity: two opens then one close, all keyed to AAPL.
+  const equityCloses = equityLegs.filter((l) => l.action === 'CLOSE');
+  assert(equityCloses.length === 1, `1 equity close (got ${equityCloses.length})`);
+  assert(equityLegs.every((l) => l.symbol === 'AAPL'), 'equity legs keyed by symbol');
+  assert(equityLegs.every((l) => l.multiplier === 1), 'equity multiplier is 1');
+
+  // Option roll: the closed contract emits a CLOSE leg; the replacement is a separate group.
+  const rolledClose = optionLegs.find((l) => l.action === 'CLOSE');
+  assert(!!rolledClose, 'rolled option emits a CLOSE leg');
+  assert(rolledClose.symbol === 'AAPL 240119C00150000', 'CLOSE leg keyed to the original OCC ticker');
+  assert(rolledClose.multiplier === 100, 'option multiplier is 100');
+  const optionSymbols = optionLegs.map((l) => l.symbol).filter((s, i, a) => a.indexOf(s) === i);
+  assert(optionSymbols.length === 2, `option roll spans 2 contracts (got ${optionSymbols.length})`);
+
+  // Grouping/ordering: every close has a preceding open within its own instrument group (opens
+  // are sorted before closes on the same date so a same-day open feeds the average cost first).
+  const closeAfterOpenInGroup = legs.every((leg, i) => {
+    if (leg.action !== 'CLOSE') return true;
+    for (let j = i - 1; j >= 0 && legs[j].symbol === leg.symbol; j--) {
+      if (legs[j].action === 'OPEN') return true;
+    }
+    return false;
+  });
+  assert(closeAfterOpenInGroup, 'every close has a preceding open within its instrument group');
+
+  Logger.log('[TEST] ✓ Realized trades test passed');
+  return {
+    legs: legs.length,
+    equityCloses: equityCloses.length,
+    optionCloses: optionLegs.filter((l) => l.action === 'CLOSE').length,
+    optionContracts: optionSymbols.length,
+  };
+}
+
+/**
  * Tests the balance reconciliation guards: cash-field selection and tolerance. No creds needed.
  */
 function testReconciliationGuards() {
@@ -446,6 +528,12 @@ function runAllValidationTests() {
     results.forex = testForexCalculations();
   } catch (error) {
     Logger.log(`Failed: testForexCalculations - ${error.message}`);
+  }
+
+  try {
+    results.realizedTrades = testRealizedTrades();
+  } catch (error) {
+    Logger.log(`Failed: testRealizedTrades - ${error.message}`);
   }
 
   try {
