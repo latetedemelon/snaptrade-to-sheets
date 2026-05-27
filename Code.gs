@@ -46,6 +46,10 @@ const CONFIG = {
  * @returns {string} Base64-encoded signature
  */
 function generateSnapTradeSignature(consumerKey, requestBody, requestPath, queryString) {
+  if (!consumerKey) {
+    throw new Error('Consumer Key is not configured. Please configure your API keys via SnapTrade → Settings → Configure API Keys.');
+  }
+  
   const sigObject = {
     content: requestBody,
     path: requestPath,
@@ -95,6 +99,15 @@ function buildSortedQuery(params) {
  */
 function snapTradeRequest(method, path, additionalParams, body) {
   const context = getSnapTradeContext();
+  
+  // Validate that required credentials are configured
+  if (!context.clientId || !context.consumerKey) {
+    throw new Error('SnapTrade API credentials are not configured. Please configure your API keys via SnapTrade → Settings → Configure API Keys.');
+  }
+  if (!context.userId || !context.userSecret) {
+    throw new Error('SnapTrade user is not registered. Please register a user via SnapTrade → Settings → Register User.');
+  }
+  
   const timestamp = Math.floor(Date.now() / 1000).toString();
 
   const params = {
@@ -452,12 +465,51 @@ function showToast(message, title, timeoutSeconds) {
 }
 
 /**
- * Clears any showing toast
+ * Clears any showing toast by showing an empty toast with 0 timeout
  */
 function clearToast() {
-  SpreadsheetApp.getActiveSpreadsheet().toast('', '', 1);
+  SpreadsheetApp.getActiveSpreadsheet().toast('', '', 0);
 }
 
+
+/**
+ * Creates a default account row with zero values when holdings data is unavailable or empty.
+ * @param {Object} account - Account object
+ * @param {Object} options - Options object with timestamp flag
+ * @returns {Array} Row data array
+ */
+function createDefaultAccountRow(account, options = {}) {
+  const { timestamp } = options;
+  
+  // For history sheet: [timestamp, accountName, accountId, cash, holdingsValue, totalValue, currency, totalCAD, institution]
+  if (timestamp) {
+    return [
+      timestamp,
+      account.name || account.number,
+      account.id || '',
+      0, // Cash
+      0, // Holdings Value
+      0, // Total Value
+      'USD',
+      '', // Total (CAD)
+      account.institution_name || '',
+    ];
+  }
+  
+  // For accounts sheet: [institution, accountName, accountId, cash, holdingsValue, totalValue, currency, totalCAD, lastUpdate, rawData]
+  return [
+    account.institution_name || '',
+    account.name || account.number,
+    account.id || '',
+    0, // Cash
+    0, // Holdings Value
+    0, // Total Value
+    'USD',
+    '', // Total (CAD)
+    (account.sync_status && account.sync_status.holdings && account.sync_status.holdings.last_successful_sync) || '',
+    JSON.stringify(account),
+  ];
+}
 
 /**
  * Calculates balance by currency from holdings data.
@@ -470,13 +522,20 @@ function calculateBalanceByCurrency(holdings) {
   if (!holdings) return byCurrency;
   
   // Add cash balances
-  if (holdings.account_balances) {
-    holdings.account_balances.forEach((balance) => {
+  // Try both 'account_balances' and 'balances' field names for backward compatibility
+  // The SnapTrade API uses 'balances', but we check both to handle potential variations
+  const balancesArray = holdings.account_balances || holdings.balances;
+  
+  if (balancesArray && Array.isArray(balancesArray)) {
+    balancesArray.forEach((balance) => {
       const currencyCode = (balance.currency && balance.currency.code) || 'USD';
       if (!byCurrency[currencyCode]) {
         byCurrency[currencyCode] = { cash: 0, holdingsValue: 0 };
       }
-      byCurrency[currencyCode].cash += balance.cash || 0;
+      
+      // Get cash amount (with fallbacks for API variations)
+      const cashAmount = balance.cash || balance.total || balance.available || 0;
+      byCurrency[currencyCode].cash += cashAmount;
     });
   }
   
@@ -1111,24 +1170,19 @@ function refreshAccounts() {
       // Log if holdings is null or undefined, but still include the account with zero values
       if (!holdings) {
         Logger.log(`No holdings data returned for account ${account.id} (${account.name || account.number}). Including account with zero values.`);
-        // Create a default USD row with zero values for accounts without holdings data
-        rows.push([
-          account.institution_name || '',
-          account.name || account.number,
-          account.id || '',
-          0,
-          0,
-          0,
-          'USD',
-          '', // Total (CAD) - will be filled with formula
-          (account.sync_status && account.sync_status.holdings && account.sync_status.holdings.last_successful_sync) || '',
-          JSON.stringify(account),
-        ]);
+        rows.push(createDefaultAccountRow(account));
         return;
       }
       
       // Use helper function to calculate balance by currency
       const byCurrency = calculateBalanceByCurrency(holdings);
+      
+      // If no currencies found (empty holdings), create a default entry
+      if (Object.keys(byCurrency).length === 0) {
+        Logger.log(`No currency data found for account ${account.id} (${account.name || account.number}). Adding with zero values.`);
+        rows.push(createDefaultAccountRow(account));
+        return;
+      }
       
       // Create a row for each currency
       Object.keys(byCurrency).forEach((currencyCode) => {
@@ -1161,18 +1215,20 @@ function refreshAccounts() {
       // Set all formulas at once
       sheet.getRange(2, 8, rows.length, 1).setFormulasR1C1(totalCADFormulas);
       
-      // Format currency columns (Cash, Holdings Value, Total Value, Total (CAD)) - optimized with RangeList
+      // Format currency columns (Cash, Holdings Value, Total Value, Total (CAD))
       const currencyFormat = CONFIG.SHEETS.CURRENCY_FORMAT;
       const currencyCols = CONFIG.SHEETS.COLUMNS.ACCOUNTS.CURRENCY_COLS;
-      const ranges = currencyCols.map(col => sheet.getRange(2, col, rows.length, 1));
-      sheet.getRangeList(ranges).setNumberFormat(currencyFormat);
+      currencyCols.forEach(col => {
+        sheet.getRange(2, col, rows.length, 1).setNumberFormat(currencyFormat);
+      });
     }
     
     // Format header row
     formatSheetHeader(sheet);
     
-    // Auto-resize columns for better readability (excluding Raw Data column which can be very wide)
-    sheet.autoResizeColumns(1, 9);
+    // Note: Removed autoResizeColumns() as it triggers formula evaluation (GOOGLEFINANCE)
+    // which causes Google Sheets' persistent "working" indicator
+    // Users can manually resize columns if needed via Format → Resize columns
     
     // Hide Account ID (column 3), Last Update (column 9), and Raw Data (column 10) by default
     sheet.hideColumns(3, 1); // Hide Account ID (column 3)
@@ -1180,14 +1236,28 @@ function refreshAccounts() {
     sheet.hideColumns(10, 1); // Hide Raw Data (column 10)
     
     // Automatically update account history (once per day) - pass the already-fetched holdings
-    updateAccountHistoryOnce(accounts, holdingsMap);
+    try {
+      updateAccountHistoryOnce(accounts, holdingsMap);
+    } catch (historyError) {
+      Logger.log(`Error updating account history: ${historyError.message}`);
+      // Continue execution - history update failure shouldn't prevent accounts refresh
+    }
     
+    // Flush all pending operations before showing alert
+    SpreadsheetApp.flush();
+    
+    // Clear any persistent toast before showing alert
     clearToast();
+    
     SpreadsheetApp.getUi().alert(`Refreshed ${rows.length} account balances from ${accounts.length} accounts.`);
+    
+    // Clear toast again after alert to ensure no residual toast appears
+    clearToast();
   } catch (error) {
     clearToast();
     SpreadsheetApp.getUi().alert(`Error refreshing accounts: ${error.message}`);
     Logger.log(`refreshAccounts error: ${error.message}`);
+    clearToast();
   }
 }
 
@@ -1260,14 +1330,22 @@ function updateAccountHistoryOnce(accounts, holdingsMap) {
   accounts.forEach((account) => {
     const holdings = accountHoldingsMap[account.id];
     
-    // Skip if holdings is null or undefined
+    // Log if holdings is null or undefined, but still include the account with zero values
     if (!holdings) {
-      Logger.log(`No holdings data returned for account ${account.id}`);
+      Logger.log(`No holdings data returned for account ${account.id} (${account.name || account.number}). Including account with zero values.`);
+      rows.push(createDefaultAccountRow(account, { timestamp }));
       return;
     }
     
     // Use helper function to calculate balance by currency
     const byCurrency = calculateBalanceByCurrency(holdings);
+    
+    // If no currencies found (empty holdings), create a default entry
+    if (Object.keys(byCurrency).length === 0) {
+      Logger.log(`No currency data found for account ${account.id} (${account.name || account.number}). Adding with zero values.`);
+      rows.push(createDefaultAccountRow(account, { timestamp }));
+      return;
+    }
     
     // Create a row for each currency
     Object.keys(byCurrency).forEach((currencyCode) => {
@@ -1311,11 +1389,12 @@ function updateAccountHistoryOnce(accounts, holdingsMap) {
     // Set all formulas at once
     sheet.getRange(startRow, 8, rows.length, 1).setFormulasR1C1(totalCADFormulas);
     
-    // Format currency columns (Cash, Holdings Value, Total Value, Total (CAD)) - optimized with RangeList
+    // Format currency columns (Cash, Holdings Value, Total Value, Total (CAD))
     const currencyFormat = CONFIG.SHEETS.CURRENCY_FORMAT;
     const currencyCols = CONFIG.SHEETS.COLUMNS.HISTORY.CURRENCY_COLS;
-    const ranges = currencyCols.map(col => sheet.getRange(startRow, col, rows.length, 1));
-    sheet.getRangeList(ranges).setNumberFormat(currencyFormat);
+    currencyCols.forEach(col => {
+      sheet.getRange(startRow, col, rows.length, 1).setNumberFormat(currencyFormat);
+    });
     
     // Format timestamp column to show only date
     sheet.getRange(startRow, 1, rows.length, 1).setNumberFormat(CONFIG.SHEETS.DATE_FORMAT);
