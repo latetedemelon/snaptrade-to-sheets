@@ -90,6 +90,22 @@ function buildSortedQuery(params) {
 }
 
 /**
+ * Parses a JSON response body, raising a clear error when the body is not JSON
+ * (e.g. an HTML error page) instead of throwing an opaque SyntaxError.
+ * @param {string} content - Raw response body
+ * @param {string} context - Short label describing the call site, used in the error
+ * @returns {Object} Parsed JSON
+ */
+function safeJsonParse(content, context) {
+  try {
+    return JSON.parse(content);
+  } catch (error) {
+    const preview = (content || '').toString().trim().substring(0, 200);
+    throw new Error(`${context}: SnapTrade returned a non-JSON response. Body began with: ${preview}`);
+  }
+}
+
+/**
  * Makes an authenticated request to the SnapTrade API.
  * @param {string} method - HTTP method (GET, POST, DELETE)
  * @param {string} path - API path starting with /api/v1/
@@ -137,7 +153,7 @@ function snapTradeRequest(method, path, additionalParams, body) {
   const content = response.getContentText();
 
   if (code >= 200 && code < 300) {
-    return JSON.parse(content);
+    return safeJsonParse(content, `SnapTrade ${method} ${path}`);
   }
 
   if (code === 429) {
@@ -207,70 +223,86 @@ function fetchAccountDataInParallel(accounts, endpointSuffix) {
   }
   
   const context = getSnapTradeContext();
-  // Generate timestamp once and reuse for all requests in this batch.
-  // This is safe because each request has a unique path (different account IDs),
-  // which creates unique signatures even with the same timestamp.
-  // The timestamp is at second-level granularity, and all parallel requests
-  // complete within the same second.
-  const timestamp = Math.floor(Date.now() / 1000).toString();
-  
-  // Build all request objects
-  const requests = accounts.map((account) => {
+
+  // UrlFetchApp.fetchAll() caps at 100 requests per call. Stay well under that with
+  // batches of 50 so large account sets (and better error isolation) are handled.
+  const BATCH_SIZE = 50;
+  const resultMap = {};
+
+  // Builds a signed request object for one account. A fresh timestamp is generated
+  // per call so retries are not rejected for clock skew.
+  const buildRequest = (account) => {
     const path = `/api/v1/accounts/${account.id}/${endpointSuffix}`;
-    
     const params = {
       clientId: context.clientId,
-      timestamp: timestamp,
+      timestamp: Math.floor(Date.now() / 1000).toString(),
       userId: context.userId,
       userSecret: context.userSecret,
     };
-    
     const sortedQuery = buildSortedQuery(params);
     const signature = generateSnapTradeSignature(context.consumerKey, null, path, sortedQuery);
-    
     return {
       url: `https://api.snaptrade.com${path}?${sortedQuery}`,
       method: 'get',
       headers: { Signature: signature },
       muteHttpExceptions: true,
     };
-  });
-  
-  if (debug) {
-    Logger.log(`[fetchAccountDataInParallel] Executing ${requests.length} parallel requests`);
-  }
-  
-  // Execute all requests in parallel
-  const responses = UrlFetchApp.fetchAll(requests);
-  
-  // Process responses and build result map
-  const resultMap = {};
-  
-  responses.forEach((response, index) => {
-    const account = accounts[index];
-    const code = response.getResponseCode();
-    const content = response.getContentText();
-    
-    if (code >= 200 && code < 300) {
-      try {
-        resultMap[account.id] = JSON.parse(content);
-        if (debug) {
-          Logger.log(`[fetchAccountDataInParallel] Successfully fetched ${endpointSuffix} for account ${account.id}`);
+  };
+
+  // Processes a batch of accounts and returns the accounts whose fetch failed.
+  const runBatch = (batch) => {
+    const responses = UrlFetchApp.fetchAll(batch.map(buildRequest));
+    const failed = [];
+
+    responses.forEach((response, index) => {
+      const account = batch[index];
+      if (!account) return;
+
+      const code = response.getResponseCode();
+      const content = response.getContentText();
+
+      if (code >= 200 && code < 300) {
+        try {
+          resultMap[account.id] = safeJsonParse(content, `${endpointSuffix} for account ${account.id}`);
+          if (debug) {
+            Logger.log(`[fetchAccountDataInParallel] Fetched ${endpointSuffix} for account ${account.id}`);
+          }
+        } catch (error) {
+          Logger.log(`[fetchAccountDataInParallel] Parse error for account ${account.id}: ${error.message}`);
+          failed.push(account);
         }
-      } catch (error) {
-        Logger.log(`[fetchAccountDataInParallel] Error parsing response for account ${account.id}: ${error.message}`);
-        resultMap[account.id] = null;
+      } else {
+        Logger.log(`[fetchAccountDataInParallel] Error fetching ${endpointSuffix} for account ${account.id} (${code}): ${content}`);
+        failed.push(account);
       }
-    } else {
-      Logger.log(`[fetchAccountDataInParallel] Error fetching ${endpointSuffix} for account ${account.id} (${code}): ${content}`);
-      resultMap[account.id] = null;
+    });
+
+    return failed;
+  };
+
+  for (let start = 0; start < accounts.length; start += BATCH_SIZE) {
+    const batch = accounts.slice(start, start + BATCH_SIZE);
+    if (debug) {
+      Logger.log(`[fetchAccountDataInParallel] Executing batch of ${batch.length} requests`);
     }
-  });
-  
-  if (debug) {
-    Logger.log(`[fetchAccountDataInParallel] Successfully fetched data for ${Object.keys(resultMap).length} accounts`);
+
+    const failed = runBatch(batch);
+
+    // Retry failed accounts once before marking them unavailable.
+    if (failed.length > 0) {
+      if (debug) Logger.log(`[fetchAccountDataInParallel] Retrying ${failed.length} failed account(s)`);
+      Utilities.sleep(CONFIG.API.INITIAL_RETRY_DELAY_MS);
+      const stillFailed = runBatch(failed);
+      stillFailed.forEach((account) => {
+        resultMap[account.id] = null;
+      });
+    }
   }
-  
+
+  if (debug) {
+    Logger.log(`[fetchAccountDataInParallel] Completed fetch for ${Object.keys(resultMap).length} accounts`);
+  }
+
   return resultMap;
 }
 
@@ -373,7 +405,7 @@ function registerSnapTradeUser(userId) {
   const content = response.getContentText();
 
   if (code === 200) {
-    const result = JSON.parse(content);
+    const result = safeJsonParse(content, 'registerSnapTradeUser');
     PropertiesService.getUserProperties().setProperties({
       SNAPTRADE_USER_ID: result.userId,
       SNAPTRADE_USER_SECRET: result.userSecret,
@@ -427,7 +459,7 @@ function generateConnectionPortalUrl(options) {
   const code = response.getResponseCode();
 
   if (code >= 200 && code < 300) {
-    const result = JSON.parse(content);
+    const result = safeJsonParse(content, 'generateConnectionPortalUrl');
     return result.redirectURI;
   }
 
@@ -444,12 +476,18 @@ function listUserAccounts() {
 }
 
 /**
- * Generates the CAD conversion formula for use in sheets.
- * Column structure: ... | Total Value (RC[-2]) | Currency (RC[-1]) | Total (CAD) |
+ * Generates an R1C1 CAD-conversion formula for use in sheets.
+ * Multiplies a value cell by the live GOOGLEFINANCE rate from its currency to CAD,
+ * passing the value through unchanged when the currency is CAD or blank.
+ * Defaults (currency at RC[-1], value at RC[-2]) match the Accounts/History layout.
+ * @param {number} [currencyOffset=-1] - Column offset to the currency-code cell
+ * @param {number} [valueOffset=-2] - Column offset to the value cell to convert
  * @returns {string} R1C1 formula for CAD conversion
  */
-function getCADConversionFormula() {
-  return '=IF(RC[-1]="CAD", RC[-2], IF(RC[-1]="", RC[-2], RC[-2] * GOOGLEFINANCE("CURRENCY:" & RC[-1] & "CAD")))';
+function getCADConversionFormula(currencyOffset, valueOffset) {
+  const cur = `RC[${currencyOffset === undefined ? -1 : currencyOffset}]`;
+  const val = `RC[${valueOffset === undefined ? -2 : valueOffset}]`;
+  return `=IF(${cur}="CAD", ${val}, IF(${cur}="", ${val}, ${val} * GOOGLEFINANCE("CURRENCY:" & ${cur} & "CAD")))`;
 }
 
 /**
@@ -1078,18 +1116,17 @@ function refreshHoldings() {
       const costBasisCADFormulas = [];
       const gainLossCADFormulas = [];
       
+      // Currency is col 6; CAD columns reference it plus their native-value column.
+      const priceCAD = getCADConversionFormula(-4, -5);        // col 10 <- Currency(6), Price(5)
+      const marketValueCAD = getCADConversionFormula(-5, -4);  // col 11 <- Currency(6), Market Value(7)
+      const costBasisCAD = getCADConversionFormula(-6, -4);    // col 12 <- Currency(6), Cost Basis(8)
+      const gainLossCAD = getCADConversionFormula(-7, -4);     // col 13 <- Currency(6), Gain/Loss(9)
+
       for (let i = 0; i < rows.length; i++) {
-        const rowNum = i + 2; // Data starts at row 2
-        
-        // Using R1C1 notation: RC[x] means same row, column offset by x
-        // Price (CAD) in col 10: references Currency (col 6, offset -4) and Price (col 5, offset -5)
-        priceCADFormulas.push([`=IF(RC[-4]="CAD", RC[-5], IF(RC[-4]="", RC[-5], RC[-5] * GOOGLEFINANCE("CURRENCY:" & RC[-4] & "CAD")))`]);
-        // Market Value (CAD) in col 11: references Currency (col 6, offset -5) and Market Value (col 7, offset -4)
-        marketValueCADFormulas.push([`=IF(RC[-5]="CAD", RC[-4], IF(RC[-5]="", RC[-4], RC[-4] * GOOGLEFINANCE("CURRENCY:" & RC[-5] & "CAD")))`]);
-        // Cost Basis (CAD) in col 12: references Currency (col 6, offset -6) and Cost Basis (col 8, offset -4)
-        costBasisCADFormulas.push([`=IF(RC[-6]="CAD", RC[-4], IF(RC[-6]="", RC[-4], RC[-4] * GOOGLEFINANCE("CURRENCY:" & RC[-6] & "CAD")))`]);
-        // Gain/Loss (CAD) in col 13: references Currency (col 6, offset -7) and Gain/Loss (col 9, offset -4)
-        gainLossCADFormulas.push([`=IF(RC[-7]="CAD", RC[-4], IF(RC[-7]="", RC[-4], RC[-4] * GOOGLEFINANCE("CURRENCY:" & RC[-7] & "CAD")))`]);
+        priceCADFormulas.push([priceCAD]);
+        marketValueCADFormulas.push([marketValueCAD]);
+        costBasisCADFormulas.push([costBasisCAD]);
+        gainLossCADFormulas.push([gainLossCAD]);
       }
       
       // Set all formulas at once
@@ -1443,7 +1480,7 @@ function refreshTransactions(startDate, endDate) {
     ]);
 
     const rows = transactions.map((tx) => [
-      tx.trade_date || tx.settlement_date,
+      tx.trade_date || tx.settlement_date || '',
       tx.amount || 0,
       '', // Amount (CAD) - will be filled with formula
       (tx.currency && tx.currency.code) || (tx.symbol && tx.symbol.currency && tx.symbol.currency.code) || 'USD', // Try to get currency from transaction
@@ -1458,13 +1495,11 @@ function refreshTransactions(startDate, endDate) {
     if (rows.length > 0) {
       sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
       
-      // Add formulas for CAD conversion using R1C1 notation for batch operations
-      // Column D is Currency (col 4), B is Amount (col 2)
+      // Amount (CAD) in col 3 references Currency (col 4, offset +1) and Amount (col 2, offset -1).
       const amountCADFormulas = [];
-      
+      const amountCAD = getCADConversionFormula(1, -1);
       for (let i = 0; i < rows.length; i++) {
-        // Using R1C1 notation: RC[x] means same row, column offset by x
-        amountCADFormulas.push([`=IF(RC[1]="CAD", RC[-1], IF(RC[1]="", RC[-1], RC[-1] * GOOGLEFINANCE("CURRENCY:" & RC[1] & "CAD")))`]);
+        amountCADFormulas.push([amountCAD]);
       }
       
       // Set all formulas at once
@@ -1517,6 +1552,7 @@ function onOpen(e) {
     .addItem('📊 Refresh Accounts', 'refreshAccounts')
     .addItem('💰 Refresh Holdings', 'refreshHoldings')
     .addItem('📜 Refresh Transactions', 'showTransactionDialog')
+    .addItem('📐 Calculate ACB / Capital Gains', 'refreshACB')
     .addSeparator()
     .addItem('📈 Track Account History', 'trackAccountHistory')
     .addSeparator()

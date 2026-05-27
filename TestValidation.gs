@@ -200,6 +200,61 @@ function compareSequentialVsParallel() {
 }
 
 /**
+ * Tests the ACB classification, record-building, and completeness diagnostics using a
+ * fixed in-memory fixture. Requires no SnapTrade credentials. The running ACB / capital
+ * gains math itself lives in sheet formulas and is verified with the worked example in
+ * docs/ACB.md.
+ */
+function testAcbCalculations() {
+  const assert = (cond, msg) => { if (!cond) throw new Error(`Assertion failed: ${msg}`); };
+  const approx = (a, b) => Math.abs(a - b) < 1e-6;
+
+  Logger.log('[TEST] Starting ACB calculation test');
+
+  // 1. Activity classification.
+  assert(classifyAcbActivity({ type: 'BUY' }) === 'BUY', 'BUY classifies as BUY');
+  assert(classifyAcbActivity({ type: 'Sell' }) === 'SELL', 'Sell classifies as SELL');
+  assert(classifyAcbActivity({ type: 'DIVIDEND', units: 2 }) === 'BUY', 'reinvested dividend is a BUY');
+  assert(classifyAcbActivity({ type: 'DIVIDEND', units: 0 }) === null, 'cash dividend is ignored');
+  assert(classifyAcbActivity({ type: 'RETURN OF CAPITAL' }) === 'ROC', 'ROC classifies as ROC');
+  assert(classifyAcbActivity({ type: 'INTEREST' }) === null, 'interest is ignored');
+  assert(classifyAcbActivity({ type: 'BUY', option_symbol: {} }) === null, 'options are ignored');
+
+  // 2. Record building from a fixture (two AAPL buys, one AAPL sell, one orphan MSFT sell).
+  const sym = (s) => ({ symbol: s, description: s, currency: { code: 'USD' } });
+  const activities = [
+    { type: 'BUY', symbol: sym('AAPL'), units: 100, price: 10, fee: 5, trade_date: '2023-01-10', currency: { code: 'USD' }, account: { name: 'RRSP' } },
+    { type: 'BUY', symbol: sym('AAPL'), units: 50, price: 12, fee: 0, trade_date: '2023-02-01', currency: { code: 'USD' }, account: { name: 'RRSP' } },
+    { type: 'SELL', symbol: sym('AAPL'), units: 80, price: 15, fee: 5, trade_date: '2023-03-01', currency: { code: 'USD' }, account: { name: 'RRSP' } },
+    { type: 'SELL', symbol: sym('MSFT'), units: 10, price: 20, fee: 0, trade_date: '2023-01-05', currency: { code: 'USD' }, account: { name: 'TFSA' } },
+    { type: 'INTEREST', symbol: sym('CASH'), amount: 1.23, trade_date: '2023-01-31', currency: { code: 'USD' } },
+  ];
+
+  const records = buildAcbRecords(activities);
+  assert(records.length === 4, `4 records built (got ${records.length})`);
+
+  sortAcbRecords(records);
+  // Sorted by symbol then date: AAPL(buy,buy,sell) then MSFT(sell).
+  assert(records[0].symbol === 'AAPL' && records[0].action === 'BUY', 'first record is AAPL BUY');
+  assert(records[2].action === 'SELL', 'third AAPL record is the SELL');
+  assert(records[3].symbol === 'MSFT', 'MSFT sorts after AAPL');
+
+  // 3. Diagnostics: AAPL ends at 70 units and reconciles; MSFT is an orphan sell.
+  const diagnostics = computeAcbDiagnostics(records, { AAPL: 70 }); // MSFT absent -> 0
+  assert(approx(diagnostics.AAPL.finalUnits, 70), `AAPL final units 70 (got ${diagnostics.AAPL.finalUnits})`);
+  assert(diagnostics.AAPL.flagged === false, 'AAPL not flagged (reconciles to 70)');
+  assert(diagnostics.MSFT.flagged === true, 'MSFT flagged (sell precedes any buy)');
+  assert(diagnostics.MSFT.reason.indexOf('first activity is a sale') !== -1, 'MSFT reason mentions orphan sale');
+
+  // 4. Reconciliation mismatch flags an otherwise-clean symbol.
+  const mismatch = computeAcbDiagnostics(records, { AAPL: 999 });
+  assert(mismatch.AAPL.flagged === true, 'AAPL flagged when holdings disagree with ledger');
+
+  Logger.log('[TEST] ✓ ACB calculation test passed');
+  return { records: records.length, aaplFinalUnits: diagnostics.AAPL.finalUnits, flagged: ['MSFT'] };
+}
+
+/**
  * Runs all validation tests.
  */
 function runAllValidationTests() {
@@ -208,11 +263,18 @@ function runAllValidationTests() {
   Logger.log('========================================');
   
   const results = {
+    acb: null,
     parallelFetch: null,
     historyUpdate: null,
     performance: null,
   };
-  
+
+  try {
+    results.acb = testAcbCalculations();
+  } catch (error) {
+    Logger.log(`Failed: testAcbCalculations - ${error.message}`);
+  }
+
   try {
     results.parallelFetch = testFetchAccountDataInParallel();
   } catch (error) {

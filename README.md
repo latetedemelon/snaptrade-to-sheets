@@ -53,6 +53,7 @@ Use the menu items to populate your sheets with data:
 - **📊 Refresh Accounts** - Creates an Accounts sheet with all connected accounts (shows separate rows for each currency)
 - **💰 Refresh Holdings** - Creates a Holdings sheet with your current positions
 - **📜 Refresh Transactions** - Creates a Transactions sheet with transaction history
+- **📐 Calculate ACB / Capital Gains** - Builds a CAD Adjusted Cost Base ledger and a capital-gains-by-tax-year summary from your trade history (see [docs/ACB.md](docs/ACB.md))
 - **📈 Track Account History** - Manually track account values over time (also auto-updates when refreshing accounts)
 
 **Note:** Refreshing accounts automatically updates the Account History sheet (once per day).
@@ -66,3 +67,37 @@ Account history is tracked automatically when you refresh accounts:
 4. Historical data builds up over time for tracking portfolio growth
 
 You can also manually trigger an update via **📊 SnapTrade → 📈 Track Account History**
+
+## Adjusted Cost Base (ACB)
+
+**📐 Calculate ACB / Capital Gains** computes a Canadian-style Adjusted Cost Base in CAD
+(using historical, trade-date exchange rates) and a realized-capital-gains summary by tax
+year. ACB is a running total from each holding's first purchase, so it is only correct when
+your activity history reaches back that far — the tool reconciles against current holdings
+and flags symbols with likely gaps, and you can seed earlier positions via an
+`ACB Opening Balances` sheet. See **[docs/ACB.md](docs/ACB.md)** for details and a worked
+example. This is a calculation aid, not tax advice.
+
+## Documentation
+
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — source layout, data flow, and local
+  development with `clasp`
+- [docs/ACB.md](docs/ACB.md) — Adjusted Cost Base & capital gains
+- [docs/API_REFERENCE.md](docs/API_REFERENCE.md) — SnapTrade endpoints and response shapes
+- [docs/SECURITY.md](docs/SECURITY.md) — authentication and credential handling
+- [docs/ROADMAP.md](docs/ROADMAP.md) — planned features
+- [docs/CHANGELOG.md](docs/CHANGELOG.md) — change history
+
+## Development
+
+This is a container-bound Google Apps Script project. To edit locally with
+[clasp](https://github.com/google/clasp):
+
+```bash
+npm install -g @google/clasp
+clasp login
+cp .clasp.json.example .clasp.json   # set "scriptId" to your bound Apps Script project
+clasp push                            # pushes .gs / .html / appsscript.json only
+```
+
+The script ID is under **Extensions → Apps Script → Project Settings** in your sheet.
