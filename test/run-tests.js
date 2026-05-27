@@ -49,7 +49,7 @@ try {
     console,
   };
   let src = '';
-  ['Code.gs', 'ACB.gs', 'Income.gs', 'Options.gs', 'Forex.gs', 'TestValidation.gs'].forEach((f) => {
+  ['Code.gs', 'ACB.gs', 'Income.gs', 'Options.gs', 'Forex.gs', 'Pnl.gs', 'TestValidation.gs'].forEach((f) => {
     src += fs.readFileSync(path.join(ROOT, f), 'utf8') + '\n';
   });
   src += '\nthis.__acbResult = testAcbCalculations();\n';
@@ -58,6 +58,7 @@ try {
   src += 'this.__forexResult = testForexCalculations();\n';
   src += 'this.__debugResult = testDebugLogHelper();\n';
   src += 'this.__reconResult = testReconciliationGuards();\n';
+  src += 'this.__pnlResult = testUnrealizedPnl();\n';
   vm.runInNewContext(src, sandbox, { filename: 'logic-test-bundle.js' });
 
   const r = sandbox.__acbResult;
@@ -82,6 +83,12 @@ try {
 
   if (!sandbox.__reconResult || !sandbox.__reconResult.ok) throw new Error('Reconciliation guard test did not pass');
   pass('Reconciliation logic test (testReconciliationGuards)');
+
+  const pnl = sandbox.__pnlResult;
+  if (!pnl || pnl.symbols !== 2) throw new Error(`P/L: expected 2 pooled symbols, got ${pnl && pnl.symbols}`);
+  if (pnl.aaplUnits !== 150) throw new Error(`P/L: expected AAPL 150 units, got ${pnl.aaplUnits}`);
+  if (pnl.aaplGainLoss !== 650) throw new Error(`P/L: expected AAPL gain/loss 650, got ${pnl.aaplGainLoss}`);
+  pass('Unrealized P/L logic test (testUnrealizedPnl)');
 } catch (e) {
   fail(`logic test — ${e.message}`);
 }
