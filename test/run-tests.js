@@ -49,11 +49,12 @@ try {
     console,
   };
   let src = '';
-  ['Code.gs', 'ACB.gs', 'Income.gs', 'TestValidation.gs'].forEach((f) => {
+  ['Code.gs', 'ACB.gs', 'Income.gs', 'Options.gs', 'TestValidation.gs'].forEach((f) => {
     src += fs.readFileSync(path.join(ROOT, f), 'utf8') + '\n';
   });
   src += '\nthis.__acbResult = testAcbCalculations();\n';
   src += 'this.__incomeResult = testIncomeTracker();\n';
+  src += 'this.__optionsResult = testOptionsExtraction();\n';
   vm.runInNewContext(src, sandbox, { filename: 'logic-test-bundle.js' });
 
   const r = sandbox.__acbResult;
@@ -65,6 +66,9 @@ try {
   const inc = sandbox.__incomeResult;
   if (!inc || inc.records !== 3) throw new Error(`Income: expected 3 records, got ${inc && inc.records}`);
   pass('Income logic test (testIncomeTracker)');
+
+  if (!sandbox.__optionsResult || !sandbox.__optionsResult.ok) throw new Error('Options extraction test did not pass');
+  pass('Options logic test (testOptionsExtraction)');
 } catch (e) {
   fail(`logic test — ${e.message}`);
 }

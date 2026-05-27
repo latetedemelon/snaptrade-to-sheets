@@ -10,6 +10,7 @@ syncs SnapTrade brokerage data into the active Google Sheet.
 | `Code.gs` | Auth (HMAC-SHA256 signing), API requests, parallel fetch, and the Accounts / Holdings / Transactions / Account History refreshers. Defines `onOpen()` (the menu) and `CONFIG`. |
 | `ACB.gs` | Adjusted Cost Base & capital-gains calculator (see [ACB.md](ACB.md)). |
 | `Income.gs` | Dividend / interest / distribution income tracker with by-year CAD summary. |
+| `Options.gs` | Options holdings sheet (contract-level fields, multiplier, CAD values). |
 | `Dialogs.gs` | Server-side handlers for the HTML dialogs. |
 | `TestValidation.gs` | Manual test/validation functions run from the Apps Script editor. |
 | `*.html` | Modal dialogs and the accounts sidebar; call server functions via `google.script.run`. |

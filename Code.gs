@@ -1611,6 +1611,7 @@ function onOpen(e) {
     .addSeparator()
     .addItem('📊 Refresh Accounts', 'refreshAccounts')
     .addItem('💰 Refresh Holdings', 'refreshHoldings')
+    .addItem('🎯 Refresh Options', 'refreshOptions')
     .addItem('📜 Refresh Transactions', 'showTransactionDialog')
     .addItem('📐 Calculate ACB / Capital Gains', 'refreshACB')
     .addItem('💵 Income & Dividends', 'refreshIncome')

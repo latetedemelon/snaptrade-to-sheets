@@ -25,6 +25,8 @@ etc.) into a single history.
   endpoint (with buying power / margin); Capital Gains reconciles ACB/unit against the
   broker's average cost. Conflicts never block — they show the canonical value with a note.
 - Transactions sheet expanded into a full ledger (adds Symbol, Units, Price, Fee).
+- **Options holdings** (`Options.gs`): a separate "Options" sheet with contract-level detail
+  (underlying, type, strike, expiry, contract multiplier) and CAD-converted values.
 
 ### Fixed
 - Unguarded `JSON.parse` in `snapTradeRequest`, `registerSnapTradeUser`, and

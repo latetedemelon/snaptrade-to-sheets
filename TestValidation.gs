@@ -287,6 +287,33 @@ function testIncomeTracker() {
 }
 
 /**
+ * Tests option contract extraction across the nesting variations. No credentials needed.
+ */
+function testOptionsExtraction() {
+  const assert = (cond, msg) => { if (!cond) throw new Error(`Assertion failed: ${msg}`); };
+
+  Logger.log('[TEST] Starting options extraction test');
+
+  // Nested: position.symbol.option_symbol with an underlying_symbol object.
+  const a = extractOptionInfo({
+    symbol: { option_symbol: { ticker: 'AAPL 240119C00150000', option_type: 'CALL', strike_price: 150, expiration_date: '2024-01-19', underlying_symbol: { symbol: 'AAPL' } } },
+    units: 2, price: 3.5, currency: { code: 'USD' },
+  });
+  assert(a.type === 'CALL', 'type CALL');
+  assert(a.strike === 150, 'strike 150');
+  assert(a.underlying === 'AAPL', 'underlying AAPL from object');
+  assert(a.expiry === '2024-01-19', 'expiry parsed');
+
+  // Flat: option fields directly on position.option_symbol, underlying inferred from ticker.
+  const b = extractOptionInfo({ option_symbol: { ticker: 'TSLA 251219P00200000', option_type: 'put', strike_price: 200 } });
+  assert(b.type === 'PUT', 'type normalized to PUT');
+  assert(b.underlying === 'TSLA', 'underlying inferred from ticker');
+
+  Logger.log('[TEST] ✓ Options extraction test passed');
+  return { ok: true };
+}
+
+/**
  * Runs all validation tests.
  */
 function runAllValidationTests() {
@@ -312,6 +339,12 @@ function runAllValidationTests() {
     results.income = testIncomeTracker();
   } catch (error) {
     Logger.log(`Failed: testIncomeTracker - ${error.message}`);
+  }
+
+  try {
+    results.options = testOptionsExtraction();
+  } catch (error) {
+    Logger.log(`Failed: testOptionsExtraction - ${error.message}`);
   }
 
   try {
