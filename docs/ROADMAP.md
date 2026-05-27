@@ -25,5 +25,6 @@ Candidate features and improvements, not yet built. Priorities are suggestions.
   still duplicate the by-currency grouping logic; extract a shared function.
 - **Aggregated error reporting** — collect per-account fetch failures and surface a summary
   to the user rather than only logging them.
-- **Automated tests + CI** — `TestValidation.gs` is run manually today. Add a clasp-based
-  push/test workflow (e.g. GitHub Actions) and mock API responses for reliable testing.
+- **Expanded test coverage** — CI (`.github/workflows/ci.yml`) now syntax-checks the
+  sources and runs the ACB logic test on every push/PR, and `deploy.yml` can `clasp push`
+  on demand. Next: mock API responses to cover the refreshers and the sheet-formula output.

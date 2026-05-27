@@ -15,6 +15,9 @@ etc.) into a single history.
   holdings, flags for orphan sells / negative units, and an optional `ACB Opening Balances`
   sheet to seed pre-window cost base.
 - Project tooling: `appsscript.json` manifest, `.clasp.json.example`, and `.claspignore`.
+- GitHub Actions: `ci.yml` (syntax-checks sources and runs the ACB logic test on push/PR
+  via a dependency-free `test/run-tests.js`) and `deploy.yml` (optional `clasp push`,
+  gated on `CLASPRC_JSON` / `SCRIPT_ID` secrets).
 - `docs/` folder; ACB logic test in `TestValidation.gs`.
 
 ### Fixed

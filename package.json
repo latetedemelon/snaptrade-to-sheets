@@ -1,0 +1,10 @@
+{
+  "name": "snaptrade-to-sheets",
+  "version": "1.0.0",
+  "description": "Google Sheets add-on that syncs SnapTrade brokerage data, with a CAD Adjusted Cost Base calculator.",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "test": "node test/run-tests.js"
+  }
+}
