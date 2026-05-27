@@ -57,6 +57,7 @@ try {
   src += 'this.__optionsResult = testOptionsExtraction();\n';
   src += 'this.__forexResult = testForexCalculations();\n';
   src += 'this.__debugResult = testDebugLogHelper();\n';
+  src += 'this.__reconResult = testReconciliationGuards();\n';
   vm.runInNewContext(src, sandbox, { filename: 'logic-test-bundle.js' });
 
   const r = sandbox.__acbResult;
@@ -78,6 +79,9 @@ try {
 
   if (!sandbox.__debugResult || !sandbox.__debugResult.ok) throw new Error('Debug-log helper test did not pass');
   pass('Debug-log logic test (testDebugLogHelper)');
+
+  if (!sandbox.__reconResult || !sandbox.__reconResult.ok) throw new Error('Reconciliation guard test did not pass');
+  pass('Reconciliation logic test (testReconciliationGuards)');
 } catch (e) {
   fail(`logic test — ${e.message}`);
 }

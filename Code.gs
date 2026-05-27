@@ -557,7 +557,7 @@ function createDefaultAccountRow(account, options = {}) {
 function computeBalanceCheck(derivedCash, authoritative) {
   if (!authoritative) return 'No /balances data';
   const diff = Math.abs(derivedCash - authoritative.cash);
-  if (diff <= 0.01) return 'OK';
+  if (diff <= CASH_RECONCILE_TOLERANCE) return 'OK';
   return `⚠ Trust /balances ${authoritative.cash.toFixed(2)} (derived ${derivedCash.toFixed(2)}) — likely a spreadsheet bug`;
 }
 
@@ -618,11 +618,21 @@ function extractBalancesByCurrency(balancesArray) {
   balancesArray.forEach((balance) => {
     const code = (balance.currency && balance.currency.code) || 'USD';
     if (!byCurrency[code]) byCurrency[code] = { cash: 0, buyingPower: 0 };
-    byCurrency[code].cash += balance.cash || balance.total || balance.available || 0;
-    byCurrency[code].buyingPower += balance.buying_power || 0;
+    // Prefer cash, then total, then available — but only fall back when the field is truly
+    // absent. A legitimate cash balance of 0 must not be replaced by total/available.
+    let cash = 0;
+    if (balance.cash != null) cash = balance.cash;
+    else if (balance.total != null) cash = balance.total;
+    else if (balance.available != null) cash = balance.available;
+    byCurrency[code].cash += cash;
+    // Take the reported buying power (don't sum across balance objects, which would double it).
+    if (balance.buying_power != null) byCurrency[code].buyingPower = balance.buying_power;
   });
   return byCurrency;
 }
+
+/** Cents-level tolerance for cross-checking cash figures (interest/rounding cause sub-cent drift). */
+const CASH_RECONCILE_TOLERANCE = 0.01;
 
 /**
  * Calculates total balance across all currencies from holdings data.

@@ -346,6 +346,40 @@ function testForexCalculations() {
 }
 
 /**
+ * Tests the balance reconciliation guards: cash-field selection and tolerance. No creds needed.
+ */
+function testReconciliationGuards() {
+  const assert = (cond, msg) => { if (!cond) throw new Error(`Assertion failed: ${msg}`); };
+
+  Logger.log('[TEST] Starting reconciliation guard test');
+
+  // A real cash balance of 0 must NOT be replaced by total/available.
+  const zeroCash = extractBalancesByCurrency([
+    { currency: { code: 'USD' }, cash: 0, total: 5000, available: 5000, buying_power: 1000 },
+  ]);
+  assert(zeroCash.USD.cash === 0, `cash 0 preserved (got ${zeroCash.USD.cash})`);
+  assert(zeroCash.USD.buyingPower === 1000, 'buying power read');
+
+  // Missing cash falls back to total.
+  const fallback = extractBalancesByCurrency([{ currency: { code: 'CAD' }, total: 250 }]);
+  assert(fallback.CAD.cash === 250, `cash falls back to total (got ${fallback.CAD.cash})`);
+
+  // Buying power is not summed across duplicate balance objects.
+  const dupes = extractBalancesByCurrency([
+    { currency: { code: 'USD' }, cash: 10, buying_power: 1000 },
+    { currency: { code: 'USD' }, cash: 10, buying_power: 1000 },
+  ]);
+  assert(dupes.USD.buyingPower === 1000, `buying power not doubled (got ${dupes.USD.buyingPower})`);
+
+  // Cash check tolerates sub-cent drift but flags real differences.
+  assert(computeBalanceCheck(100.004, { cash: 100, buyingPower: 0 }) === 'OK', 'sub-cent drift OK');
+  assert(computeBalanceCheck(105, { cash: 100, buyingPower: 0 }).indexOf('Trust /balances') !== -1, 'real diff flagged');
+
+  Logger.log('[TEST] ✓ Reconciliation guard test passed');
+  return { ok: true };
+}
+
+/**
  * Tests the pure debug-log string helper (truncation + safe stringify). No credentials needed.
  */
 function testDebugLogHelper() {
@@ -407,6 +441,12 @@ function runAllValidationTests() {
     results.forex = testForexCalculations();
   } catch (error) {
     Logger.log(`Failed: testForexCalculations - ${error.message}`);
+  }
+
+  try {
+    results.reconciliation = testReconciliationGuards();
+  } catch (error) {
+    Logger.log(`Failed: testReconciliationGuards - ${error.message}`);
   }
 
   try {

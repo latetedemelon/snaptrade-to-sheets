@@ -141,7 +141,9 @@ function computeForexDiagnostics(records, currentCash) {
     const d = byCurrency[rec.currency];
     if (!d.seen) { d.firstIsDispose = rec.direction === 'Dispose'; d.seen = true; }
     d.finalUnits += rec.direction === 'Acquire' ? rec.amount : -rec.amount;
-    if (d.finalUnits < -ACB_UNIT_TOLERANCE) d.wentNegative = true;
+    // Foreign-currency "units" are dollar amounts, so use a cents-level tolerance, not the
+    // share-count tolerance, when judging negative balances and reconciliation drift.
+    if (d.finalUnits < -CASH_RECONCILE_TOLERANCE) d.wentNegative = true;
   });
 
   Object.keys(byCurrency).forEach((currency) => {
@@ -150,7 +152,7 @@ function computeForexDiagnostics(records, currentCash) {
     const reasons = [];
     if (d.firstIsDispose) reasons.push('first activity is a disposition (missing prior inflow)');
     if (d.wentNegative) reasons.push('balance went negative');
-    if (cash !== null && Math.abs(d.finalUnits - cash) > ACB_UNIT_TOLERANCE) {
+    if (cash !== null && Math.abs(d.finalUnits - cash) > CASH_RECONCILE_TOLERANCE) {
       reasons.push(`⚠ Trust current cash ${round4(cash)} (ledger ${round4(d.finalUnits)}) — likely incomplete history`);
     }
     d.currentCash = cash;
