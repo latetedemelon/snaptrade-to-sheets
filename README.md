@@ -56,6 +56,7 @@ Use the menu items to populate your sheets with data:
 - **📜 Refresh Transactions** - Creates a Transactions sheet with the full activity ledger (date, type, symbol, units, price, fee, CAD amount)
 - **📐 Calculate ACB / Capital Gains** - Builds a CAD Adjusted Cost Base ledger and a capital-gains-by-tax-year summary from your trade history (see [docs/ACB.md](docs/ACB.md))
 - **💵 Income & Dividends** - Builds an Income sheet: a CAD-converted ledger of dividends, interest, distributions, and withholding tax, summarized by tax year
+- **💱 Forex Gains** - Tracks capital gains on foreign currency itself (currency as property), in CAD (see [docs/FOREX.md](docs/FOREX.md))
 - **📈 Track Account History** - Manually track account values over time (also auto-updates when refreshing accounts)
 
 **Note:** Refreshing accounts automatically updates the Account History sheet (once per day).

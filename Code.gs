@@ -1615,6 +1615,7 @@ function onOpen(e) {
     .addItem('📜 Refresh Transactions', 'showTransactionDialog')
     .addItem('📐 Calculate ACB / Capital Gains', 'refreshACB')
     .addItem('💵 Income & Dividends', 'refreshIncome')
+    .addItem('💱 Forex Gains (currency as property)', 'refreshForex')
     .addSeparator()
     .addItem('📈 Track Account History', 'trackAccountHistory')
     .addSeparator()

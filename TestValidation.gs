@@ -314,6 +314,38 @@ function testOptionsExtraction() {
 }
 
 /**
+ * Tests forex (currency-as-property) record building and diagnostics. No credentials needed.
+ */
+function testForexCalculations() {
+  const assert = (cond, msg) => { if (!cond) throw new Error(`Assertion failed: ${msg}`); };
+  const approx = (a, b) => Math.abs(a - b) < 1e-6;
+
+  Logger.log('[TEST] Starting forex calculation test');
+
+  const activities = [
+    { type: 'SELL', amount: 1000, trade_date: '2023-01-10', currency: { code: 'USD' }, account: { name: 'Margin' } },
+    { type: 'BUY', amount: -600, trade_date: '2023-02-01', currency: { code: 'USD' } },
+    { type: 'DIVIDEND', amount: 50, trade_date: '2023-03-01', currency: { code: 'USD' } },
+    { type: 'INTEREST', amount: 5, trade_date: '2023-04-01', currency: { code: 'CAD' } }, // home currency ignored
+    { type: 'FEE', amount: 0, trade_date: '2023-04-02', currency: { code: 'USD' } },       // non-cash ignored
+    { type: 'BUY', amount: -200, trade_date: '2023-01-05', currency: { code: 'EUR' } },     // orphan disposition
+  ];
+
+  const records = buildForexRecords(activities);
+  assert(records.length === 4, `4 forex records (got ${records.length})`); // 3 USD + 1 EUR
+
+  sortForexRecords(records);
+  const diag = computeForexDiagnostics(records, { USD: 450 }); // EUR absent -> 0
+  assert(approx(diag.USD.finalUnits, 450), `USD balance 450 (got ${diag.USD.finalUnits})`);
+  assert(diag.USD.flagged === false, 'USD reconciles, not flagged');
+  assert(diag.EUR.flagged === true, 'EUR orphan disposition flagged');
+  assert(diag.EUR.reason.indexOf('first activity is a disposition') !== -1, 'EUR reason mentions orphan disposition');
+
+  Logger.log('[TEST] ✓ Forex calculation test passed');
+  return { records: records.length };
+}
+
+/**
  * Runs all validation tests.
  */
 function runAllValidationTests() {
@@ -345,6 +377,12 @@ function runAllValidationTests() {
     results.options = testOptionsExtraction();
   } catch (error) {
     Logger.log(`Failed: testOptionsExtraction - ${error.message}`);
+  }
+
+  try {
+    results.forex = testForexCalculations();
+  } catch (error) {
+    Logger.log(`Failed: testForexCalculations - ${error.message}`);
   }
 
   try {

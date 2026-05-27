@@ -27,6 +27,9 @@ etc.) into a single history.
 - Transactions sheet expanded into a full ledger (adds Symbol, Units, Price, Fee).
 - **Options holdings** (`Options.gs`): a separate "Options" sheet with contract-level detail
   (underlying, type, strike, expiry, contract multiplier) and CAD-converted values.
+- **Forex capital gains** (`Forex.gs`): a "Forex Ledger" and "Forex Gains" sheet treating
+  foreign currency as property — per-currency CAD ACB and realized FX gains by tax year,
+  with the same soft completeness flagging. See [FOREX.md](FOREX.md).
 
 ### Fixed
 - Unguarded `JSON.parse` in `snapTradeRequest`, `registerSnapTradeUser`, and

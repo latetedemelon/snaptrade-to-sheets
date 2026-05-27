@@ -11,6 +11,7 @@ syncs SnapTrade brokerage data into the active Google Sheet.
 | `ACB.gs` | Adjusted Cost Base & capital-gains calculator (see [ACB.md](ACB.md)). |
 | `Income.gs` | Dividend / interest / distribution income tracker with by-year CAD summary. |
 | `Options.gs` | Options holdings sheet (contract-level fields, multiplier, CAD values). |
+| `Forex.gs` | Foreign-exchange capital gains (currency as property); see [FOREX.md](FOREX.md). |
 | `Dialogs.gs` | Server-side handlers for the HTML dialogs. |
 | `TestValidation.gs` | Manual test/validation functions run from the Apps Script editor. |
 | `*.html` | Modal dialogs and the accounts sidebar; call server functions via `google.script.run`. |
