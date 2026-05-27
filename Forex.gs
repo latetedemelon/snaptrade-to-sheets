@@ -40,7 +40,7 @@ function refreshForex() {
     const currentCash = fetchCurrentCashByCurrency();
     const diagnostics = computeForexDiagnostics(records, currentCash);
 
-    const ledgerInfo = writeForexLedger(records);
+    const ledgerInfo = writeForexLedger(records, diagnostics);
     writeForexSummary(ledgerInfo, diagnostics);
 
     clearToast();
@@ -164,11 +164,16 @@ function computeForexDiagnostics(records, currentCash) {
 
 /**
  * Writes the Forex Ledger. Running balance and ACB are cell formulas referencing the row
- * above within the same currency group (reset to 0 at each group's first row).
+ * above within the same currency group (reset to 0 at each group's first row). The realized
+ * FX gain/loss is suppressed for currencies flagged with incomplete history, because their
+ * running ACB is untrustworthy and a confident number would be fabricated (and would feed
+ * the by-year totals).
  * @param {Array<Object>} records - Sorted records
+ * @param {Object} diagnostics - map of currency -> {flagged, ...}
  * @returns {{lastDataRow: number, currencyLastRow: Object, currencyCount: number}}
  */
-function writeForexLedger(records) {
+function writeForexLedger(records, diagnostics) {
+  const isFlagged = (currency) => !!(diagnostics && diagnostics[currency] && diagnostics[currency].flagged);
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(FOREX_LEDGER_SHEET) || ss.insertSheet(FOREX_LEDGER_SHEET);
   sheet.clear();
@@ -199,8 +204,12 @@ function writeForexLedger(records) {
       realized = '';
     } else {
       delta = `=-$E${r}`;
-      runningACB = `=${prevACB}-(${prevACBUnit}*$E${r})`;
-      realized = `=$G${r}-(${prevACBUnit}*$E${r})`;
+      // Floor ACB at 0 so an over-disposition (missing inflows) can't drive the basis
+      // negative and fabricate gains on later rows.
+      runningACB = `=MAX(0,${prevACB}-(${prevACBUnit}*$E${r}))`;
+      // Blank realized for incomplete-history currencies (the Status column explains why);
+      // blank cells contribute 0 to the SUMIFS/SUMPRODUCT totals.
+      realized = isFlagged(rec.currency) ? '' : `=$G${r}-(${prevACBUnit}*$E${r})`;
     }
     const runningUnits = `=${prevUnits}+$H${r}`;
     const acbPerUnit = `=IF($I${r}=0,0,$J${r}/$I${r})`;
