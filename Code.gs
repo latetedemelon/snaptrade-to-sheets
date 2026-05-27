@@ -1520,51 +1520,65 @@ function refreshTransactions(startDate, endDate) {
       'Description',
       'Category',
       'Account',
+      'Symbol',
+      'Units',
+      'Price',
+      'Fee',
       'Attachment',
       'Transaction ID',
       'Raw Data',
     ]);
 
-    const rows = transactions.map((tx) => [
-      tx.trade_date || tx.settlement_date || '',
-      tx.amount || 0,
-      '', // Amount (CAD) - will be filled with formula
-      (tx.currency && tx.currency.code) || (tx.symbol && tx.symbol.currency && tx.symbol.currency.code) || 'USD', // Try to get currency from transaction
-      tx.description || '',
-      tx.type,
-      (tx.account && (tx.account.name || tx.account.number)) || '',
-      '',
-      tx.id || '',
-      JSON.stringify(tx),
-    ]);
+    const rows = transactions.map((tx) => {
+      const symbolInfo = extractSymbolInfo(tx.symbol);
+      const symbol = symbolInfo.symbol === 'N/A' ? '' : symbolInfo.symbol;
+      return [
+        tx.trade_date || tx.settlement_date || '',
+        tx.amount || 0,
+        '', // Amount (CAD) - will be filled with formula
+        (tx.currency && tx.currency.code) || (tx.symbol && tx.symbol.currency && tx.symbol.currency.code) || 'USD', // Try to get currency from transaction
+        tx.description || '',
+        tx.type,
+        (tx.account && (tx.account.name || tx.account.number)) || '',
+        symbol,
+        tx.units || '',
+        tx.price || '',
+        tx.fee || '',
+        '',
+        tx.id || '',
+        JSON.stringify(tx),
+      ];
+    });
 
     if (rows.length > 0) {
       sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
-      
+
       // Amount (CAD) in col 3 references Currency (col 4, offset +1) and Amount (col 2, offset -1).
       const amountCADFormulas = [];
       const amountCAD = getCADConversionFormula(1, -1);
       for (let i = 0; i < rows.length; i++) {
         amountCADFormulas.push([amountCAD]);
       }
-      
+
       // Set all formulas at once
       sheet.getRange(2, 3, rows.length, 1).setFormulasR1C1(amountCADFormulas);
-      
-      // Format amount columns as currency
-      sheet.getRange(2, 2, rows.length, 1).setNumberFormat('$#,##0.00'); // Amount
-      sheet.getRange(2, 3, rows.length, 1).setNumberFormat('$#,##0.00'); // Amount (CAD)
+
+      // Format amount/price columns as currency
+      sheet.getRange(2, 2, rows.length, 1).setNumberFormat('$#,##0.00');  // Amount
+      sheet.getRange(2, 3, rows.length, 1).setNumberFormat('$#,##0.00');  // Amount (CAD)
+      sheet.getRange(2, 10, rows.length, 1).setNumberFormat('$#,##0.00'); // Price
+      sheet.getRange(2, 11, rows.length, 1).setNumberFormat('$#,##0.00'); // Fee
     }
-    
+
     // Format header row
     formatSheetHeader(sheet);
+
+    // Auto-resize columns for better readability (excluding Transaction ID / Raw Data)
+    sheet.autoResizeColumns(1, 11);
     
-    // Auto-resize columns for better readability (excluding Raw Data column which can be very wide)
-    sheet.autoResizeColumns(1, 8);
-    
-    // Hide Transaction ID and Raw Data columns by default
-    sheet.hideColumns(9, 2);
-    
+    // Hide Attachment, Transaction ID, and Raw Data columns by default
+    sheet.hideColumns(12, 3);
+
     SpreadsheetApp.getUi().alert(`Refreshed ${rows.length} transactions.`);
   } catch (error) {
     SpreadsheetApp.getUi().alert(`Error refreshing transactions: ${error.message}`);
@@ -1599,6 +1613,7 @@ function onOpen(e) {
     .addItem('💰 Refresh Holdings', 'refreshHoldings')
     .addItem('📜 Refresh Transactions', 'showTransactionDialog')
     .addItem('📐 Calculate ACB / Capital Gains', 'refreshACB')
+    .addItem('💵 Income & Dividends', 'refreshIncome')
     .addSeparator()
     .addItem('📈 Track Account History', 'trackAccountHistory')
     .addSeparator()

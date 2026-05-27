@@ -295,6 +295,18 @@ function round4(n) {
 }
 
 /**
+ * Returns an A1 formula giving the CAD exchange rate for a currency on a given date, using
+ * the last available GOOGLEFINANCE close in a short back-window (handles weekends/holidays)
+ * and falling back to the current rate then 1.0. Returns 1 when the currency is CAD.
+ * @param {string} curRef - A1 reference to the currency-code cell (e.g. "$H5")
+ * @param {string} dateRef - A1 reference to the date cell (e.g. "$A5")
+ * @returns {string} formula string
+ */
+function historicalCadFxFormula(curRef, dateRef) {
+  return `=IF(${curRef}="CAD",1,IFERROR(LET(t,GOOGLEFINANCE("CURRENCY:"&${curRef}&"CAD","price",${dateRef}-7,${dateRef}),INDEX(t,ROWS(t),2)),IFERROR(GOOGLEFINANCE("CURRENCY:"&${curRef}&"CAD"),1)))`;
+}
+
+/**
  * Sorts records by symbol, then trade date, then action so that on a given day opening
  * balances and buys are applied before return-of-capital and sells (avoids transient
  * negative unit counts).
@@ -338,9 +350,8 @@ function writeAcbLedger(records) {
     const prevACB = firstOfGroup ? '0' : `$M${r - 1}`;
     const prevACBUnit = firstOfGroup ? '0' : `$N${r - 1}`;
 
-    // FX→CAD on the trade date: last available close in a short back-window, falling back
-    // to the current rate then 1.0 if GOOGLEFINANCE has no data for that currency.
-    const fx = `=IF($H${r}="CAD",1,IFERROR(LET(t,GOOGLEFINANCE("CURRENCY:"&$H${r}&"CAD","price",$A${r}-7,$A${r}),INDEX(t,ROWS(t),2)),IFERROR(GOOGLEFINANCE("CURRENCY:"&$H${r}&"CAD"),1)))`;
+    // FX→CAD on the trade date (see historicalCadFxFormula).
+    const fx = historicalCadFxFormula(`$H${r}`, `$A${r}`);
 
     let unitsCell, priceCell, feeCell, amountCAD, deltaUnits, runningACB, realized;
     if (rec.action === 'OPENING') {

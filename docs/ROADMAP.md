@@ -8,8 +8,6 @@ Candidate features and improvements, not yet built. Priorities are suggestions.
   account history on a schedule, instead of manual menu clicks.
 - **Year-end tax summaries** — a T5008-style realized-gains report (the Capital Gains sheet
   is the foundation) and T5/T3 income summaries from dividend/interest activity.
-- **Dividend & income tracker** — aggregate cash dividends, interest, and distributions per
-  symbol and per year (currently ignored by the ACB calculator).
 - **Portfolio performance** — money-weighted (XIRR) and time-weighted returns from the
   account-history and activity data.
 - **Configurable activity-type mapping** — a settings dialog to map a brokerage's activity

@@ -49,19 +49,24 @@ try {
     console,
   };
   let src = '';
-  ['Code.gs', 'ACB.gs', 'TestValidation.gs'].forEach((f) => {
+  ['Code.gs', 'ACB.gs', 'Income.gs', 'TestValidation.gs'].forEach((f) => {
     src += fs.readFileSync(path.join(ROOT, f), 'utf8') + '\n';
   });
   src += '\nthis.__acbResult = testAcbCalculations();\n';
-  vm.runInNewContext(src, sandbox, { filename: 'acb-test-bundle.js' });
+  src += 'this.__incomeResult = testIncomeTracker();\n';
+  vm.runInNewContext(src, sandbox, { filename: 'logic-test-bundle.js' });
 
   const r = sandbox.__acbResult;
-  if (!r || r.records !== 4) throw new Error(`expected 4 records, got ${r && r.records}`);
-  if (r.aaplFinalUnits !== 70) throw new Error(`expected AAPL 70 units, got ${r.aaplFinalUnits}`);
-  if (!r.flagged || r.flagged.indexOf('MSFT') === -1) throw new Error('expected MSFT to be flagged');
+  if (!r || r.records !== 4) throw new Error(`ACB: expected 4 records, got ${r && r.records}`);
+  if (r.aaplFinalUnits !== 70) throw new Error(`ACB: expected AAPL 70 units, got ${r.aaplFinalUnits}`);
+  if (!r.flagged || r.flagged.indexOf('MSFT') === -1) throw new Error('ACB: expected MSFT to be flagged');
   pass('ACB logic test (testAcbCalculations)');
+
+  const inc = sandbox.__incomeResult;
+  if (!inc || inc.records !== 3) throw new Error(`Income: expected 3 records, got ${inc && inc.records}`);
+  pass('Income logic test (testIncomeTracker)');
 } catch (e) {
-  fail(`ACB logic test — ${e.message}`);
+  fail(`logic test — ${e.message}`);
 }
 
 if (failures > 0) {

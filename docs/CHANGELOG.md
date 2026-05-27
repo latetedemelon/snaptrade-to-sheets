@@ -18,7 +18,13 @@ etc.) into a single history.
 - GitHub Actions: `ci.yml` (syntax-checks sources and runs the ACB logic test on push/PR
   via a dependency-free `test/run-tests.js`) and `deploy.yml` (optional `clasp push`,
   gated on `CLASPRC_JSON` / `SCRIPT_ID` secrets).
-- `docs/` folder; ACB logic test in `TestValidation.gs`.
+- `docs/` folder; ACB and income logic tests in `TestValidation.gs`.
+- **Income & dividend tracker** (`Income.gs`): an "Income" sheet with a CAD-converted ledger
+  of dividends, interest, distributions, and withholding tax, summarized by tax year.
+- Soft cross-checks: Accounts sheet reconciles holdings-derived cash against the `/balances`
+  endpoint (with buying power / margin); Capital Gains reconciles ACB/unit against the
+  broker's average cost. Conflicts never block — they show the canonical value with a note.
+- Transactions sheet expanded into a full ledger (adds Symbol, Units, Price, Fee).
 
 ### Fixed
 - Unguarded `JSON.parse` in `snapTradeRequest`, `registerSnapTradeUser`, and

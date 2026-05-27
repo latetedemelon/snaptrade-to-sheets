@@ -255,6 +255,38 @@ function testAcbCalculations() {
 }
 
 /**
+ * Tests income classification and record-building from a fixed fixture. No credentials needed.
+ */
+function testIncomeTracker() {
+  const assert = (cond, msg) => { if (!cond) throw new Error(`Assertion failed: ${msg}`); };
+
+  Logger.log('[TEST] Starting income tracker test');
+
+  assert(classifyIncomeActivity({ type: 'DIVIDEND' }) === 'Dividend', 'DIVIDEND -> Dividend');
+  assert(classifyIncomeActivity({ type: 'INTEREST' }) === 'Interest', 'INTEREST -> Interest');
+  assert(classifyIncomeActivity({ type: 'DISTRIBUTION' }) === 'Distribution', 'DISTRIBUTION -> Distribution');
+  assert(classifyIncomeActivity({ type: 'NON_RESIDENT_TAX' }) === 'Tax Withheld', 'NR tax -> Tax Withheld');
+  assert(classifyIncomeActivity({ type: 'BUY' }) === null, 'BUY is not income');
+
+  const sym = (s) => ({ symbol: s, description: s, currency: { code: 'USD' } });
+  const activities = [
+    { type: 'DIVIDEND', symbol: sym('VTI'), amount: 50, trade_date: '2023-03-15', currency: { code: 'USD' }, account: { name: 'RRSP' } },
+    { type: 'INTEREST', amount: 5, trade_date: '2023-04-01', currency: { code: 'CAD' }, account: { name: 'Cash' } },
+    { type: 'NON_RESIDENT_TAX', symbol: sym('VTI'), amount: -7.5, trade_date: '2023-03-15', currency: { code: 'USD' } },
+    { type: 'BUY', symbol: sym('VTI'), amount: -1000, trade_date: '2023-02-01', currency: { code: 'USD' } },
+    { type: 'DIVIDEND', symbol: sym('XEQT'), amount: 0, trade_date: '2023-05-01', currency: { code: 'CAD' } }, // reinvested-as-units: no cash
+  ];
+
+  const records = buildIncomeRecords(activities);
+  assert(records.length === 3, `3 income records (got ${records.length})`);
+  const cats = records.map((r) => r.category).sort();
+  assert(cats.join(',') === 'Dividend,Interest,Tax Withheld', `categories (got ${cats.join(',')})`);
+
+  Logger.log('[TEST] ✓ Income tracker test passed');
+  return { records: records.length };
+}
+
+/**
  * Runs all validation tests.
  */
 function runAllValidationTests() {
@@ -264,6 +296,7 @@ function runAllValidationTests() {
   
   const results = {
     acb: null,
+    income: null,
     parallelFetch: null,
     historyUpdate: null,
     performance: null,
@@ -273,6 +306,12 @@ function runAllValidationTests() {
     results.acb = testAcbCalculations();
   } catch (error) {
     Logger.log(`Failed: testAcbCalculations - ${error.message}`);
+  }
+
+  try {
+    results.income = testIncomeTracker();
+  } catch (error) {
+    Logger.log(`Failed: testIncomeTracker - ${error.message}`);
   }
 
   try {
