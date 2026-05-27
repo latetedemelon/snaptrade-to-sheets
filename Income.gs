@@ -82,15 +82,16 @@ function buildIncomeRecords(activities) {
     const amount = Number(tx.amount) || 0;
     if (amount === 0) return; // reinvested-as-units rows carry no cash income
 
-    const dateStr = tx.trade_date || tx.settlement_date;
-    const date = dateStr ? new Date(dateStr) : null;
-    if (!date || isNaN(date.getTime())) return;
+    const date = parseActivityDate_(tx.trade_date || tx.settlement_date);
+    if (!date) return;
 
     const symbolInfo = extractSymbolInfo(tx.symbol);
     const symbol = symbolInfo.symbol === 'N/A' ? '' : symbolInfo.symbol;
+    // Leave currency blank when untagged rather than assuming USD, so a missing currency
+    // resolves to rate 1 (no conversion) and is visibly empty instead of silently mis-converted.
     const currency = (tx.currency && tx.currency.code)
       || (tx.symbol && tx.symbol.currency && tx.symbol.currency.code)
-      || 'USD';
+      || '';
 
     records.push({
       date: date,

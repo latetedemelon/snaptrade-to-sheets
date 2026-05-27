@@ -87,7 +87,8 @@ If something doesn't work, turn on **SnapTrade → Settings → 🐞 Toggle Debu
 the problem, then open **🐞 View Debug Log**. A "Debug Log" sheet records API calls (endpoint,
 status, timing), per-account fetch results, per-feature counts, and any errors — enough to
 diagnose most issues without opening the Apps Script editor. Credentials and request values
-are never written to the log. Turn debug mode off when done (it slows refreshes), and use
+are never written to the log (API error responses may appear, truncated). Turn debug mode
+off when done (it slows refreshes), and use
 **🐞 Clear Debug Log** to reset the sheet.
 
 ## Documentation

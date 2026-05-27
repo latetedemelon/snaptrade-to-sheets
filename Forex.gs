@@ -75,9 +75,8 @@ function buildForexRecords(activities) {
     const amount = Number(tx.amount) || 0;
     if (amount === 0) return; // non-cash activity
 
-    const dateStr = tx.trade_date || tx.settlement_date;
-    const date = dateStr ? new Date(dateStr) : null;
-    if (!date || isNaN(date.getTime())) return;
+    const date = parseActivityDate_(tx.trade_date || tx.settlement_date);
+    if (!date) return;
 
     records.push({
       date: date,

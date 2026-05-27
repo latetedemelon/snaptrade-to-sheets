@@ -73,5 +73,13 @@ should be its own sheet rather than folded into Capital Gains.
 - **Aggregated error reporting** — collect per-account fetch failures and surface a summary
   to the user rather than only logging them.
 - **Expanded test coverage** — CI (`.github/workflows/ci.yml`) now syntax-checks the
-  sources and runs the ACB logic test on every push/PR, and `deploy.yml` can `clasp push`
+  sources and runs the logic tests on every push/PR, and `deploy.yml` can `clasp push`
   on demand. Next: mock API responses to cover the refreshers and the sheet-formula output.
+- **Formula-level numeric tests** — the ACB and forex running-ACB / realized-gain math lives
+  in sheet formulas that `node` cannot evaluate, so those numbers (the most tax-sensitive
+  ones) are currently only covered at the record-building layer. Add a pure-JS reference
+  implementation of the running ledger to assert the math end-to-end.
+- **Approximate CAD cost check** — optionally add an informational column that converts the
+  broker's native average cost to CAD at the current rate, clearly labelled approximate, so
+  the Cost Check does something for USD holdings (it is currently "n/a" for non-CAD on
+  purpose, to avoid historical-vs-spot false mismatches).

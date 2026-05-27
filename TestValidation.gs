@@ -282,6 +282,11 @@ function testIncomeTracker() {
   const cats = records.map((r) => r.category).sort();
   assert(cats.join(',') === 'Dividend,Interest,Tax Withheld', `categories (got ${cats.join(',')})`);
 
+  // Timezone-safe date parsing: calendar day/year preserved regardless of zone.
+  assert(parseActivityDate_('2024-01-01').getFullYear() === 2024, 'Jan 1 stays in its year (no UTC rollback)');
+  assert(parseActivityDate_('2023-12-31').getDate() === 31, 'Dec 31 calendar day preserved');
+  assert(parseActivityDate_('') === null, 'empty date -> null');
+
   Logger.log('[TEST] ✓ Income tracker test passed');
   return { records: records.length };
 }

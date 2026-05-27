@@ -30,6 +30,10 @@ etc.) into a single history.
 - **Forex capital gains** (`Forex.gs`): a "Forex Ledger" and "Forex Gains" sheet treating
   foreign currency as property — per-currency CAD ACB and realized FX gains by tax year,
   with the same soft completeness flagging. See [FOREX.md](FOREX.md).
+- Transactions "Amount (CAD)" now uses the historical trade-date FX rate (matching ACB /
+  Income / Forex) instead of today's spot rate.
+- Timezone-safe activity-date parsing (`parseActivityDate_`) so tax-year bucketing can't drift
+  across the Dec 31 / Jan 1 boundary; untagged income currency no longer assumed to be USD.
 - **Debug logging**: a `debugLog()` helper plus a user-visible "Debug Log" sheet. Toggle it
   from SnapTrade → Settings → Toggle Debug Mode (with View / Clear Debug Log actions). When
   on, API calls, parallel fetches, per-feature counts, and errors are written to the sheet

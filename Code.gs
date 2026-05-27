@@ -166,7 +166,7 @@ function snapTradeRequest(method, path, additionalParams, body) {
     throw new Error('Rate limited. Please wait before making more requests.');
   }
 
-  debugLog('snapTradeRequest', `error ${code} on ${method} ${path}`, content);
+  debugLog('snapTradeRequest', `error ${code} on ${method} ${path}`, content.substring(0, 500));
   throw new Error(`SnapTrade API Error (${code}): ${content}`);
 }
 
@@ -271,7 +271,7 @@ function fetchAccountDataInParallel(accounts, endpointSuffix) {
           failed.push(account);
         }
       } else {
-        debugLog('fetchAccountDataInParallel', `HTTP ${code} for account ${account.id} (${endpointSuffix})`, content);
+        debugLog('fetchAccountDataInParallel', `HTTP ${code} for account ${account.id} (${endpointSuffix})`, content.substring(0, 500));
         failed.push(account);
       }
     });
@@ -1640,8 +1640,10 @@ function refreshTransactions(startDate, endDate) {
     const rows = transactions.map((tx) => {
       const symbolInfo = extractSymbolInfo(tx.symbol);
       const symbol = symbolInfo.symbol === 'N/A' ? '' : symbolInfo.symbol;
+      const rawDate = tx.trade_date || tx.settlement_date || '';
+      const parsedDate = parseActivityDate_(rawDate);
       return [
-        tx.trade_date || tx.settlement_date || '',
+        parsedDate || rawDate, // real Date when parseable (needed for trade-date FX), else raw
         tx.amount || 0,
         '', // Amount (CAD) - will be filled with formula
         (tx.currency && tx.currency.code) || (tx.symbol && tx.symbol.currency && tx.symbol.currency.code) || 'USD', // Try to get currency from transaction
@@ -1661,17 +1663,19 @@ function refreshTransactions(startDate, endDate) {
     if (rows.length > 0) {
       sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
 
-      // Amount (CAD) in col 3 references Currency (col 4, offset +1) and Amount (col 2, offset -1).
+      // Amount (CAD) = native Amount (col B) x the trade-date FX rate, keyed on Currency
+      // (col D) and Date (col A). Uses historical (not spot) rates to match the ACB, Income,
+      // and Forex sheets.
       const amountCADFormulas = [];
-      const amountCAD = getCADConversionFormula(1, -1);
       for (let i = 0; i < rows.length; i++) {
-        amountCADFormulas.push([amountCAD]);
+        const r = i + 2;
+        const fxBody = historicalCadFxFormula(`$D${r}`, `$A${r}`).substring(1); // drop leading '='
+        amountCADFormulas.push([`=$B${r}*${fxBody}`]);
       }
+      sheet.getRange(2, 3, rows.length, 1).setFormulas(amountCADFormulas);
 
-      // Set all formulas at once
-      sheet.getRange(2, 3, rows.length, 1).setFormulasR1C1(amountCADFormulas);
-
-      // Format amount/price columns as currency
+      // Format date and amount/price columns
+      sheet.getRange(2, 1, rows.length, 1).setNumberFormat(CONFIG.SHEETS.DATE_FORMAT); // Date
       sheet.getRange(2, 2, rows.length, 1).setNumberFormat('$#,##0.00');  // Amount
       sheet.getRange(2, 3, rows.length, 1).setNumberFormat('$#,##0.00');  // Amount (CAD)
       sheet.getRange(2, 10, rows.length, 1).setNumberFormat('$#,##0.00'); // Price

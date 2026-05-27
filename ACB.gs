@@ -309,6 +309,22 @@ function historicalCadFxFormula(curRef, dateRef) {
 }
 
 /**
+ * Parses an activity date string ("YYYY-MM-DD" or ISO) into a local-midnight Date so the
+ * calendar day — and therefore the tax year — is preserved regardless of timezone. Parsing
+ * "YYYY-MM-DD" with `new Date(str)` treats it as UTC midnight, which can roll back a day (and
+ * a year, on Jan 1) in negative-offset zones and disagree with the sheet's YEAR() formulas.
+ * @param {string} dateStr
+ * @returns {Date|null} null if unparseable
+ */
+function parseActivityDate_(dateStr) {
+  if (!dateStr) return null;
+  const m = String(dateStr).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  const d = new Date(dateStr);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+/**
  * Sorts records by symbol, then trade date, then action so that on a given day opening
  * balances and buys are applied before return-of-capital and sells (avoids transient
  * negative unit counts).
