@@ -142,8 +142,11 @@ function buildRealizedLegs(activities) {
     const amount = Math.abs(Number(tx.amount) || 0);
     const price = Math.abs(Number(tx.price) || 0);
     let proceeds;
-    if (amount > 0) proceeds = amount / multiplier; // total amount back to per-unit
-    else proceeds = price; // per-contract / per-share price; 0 for a worthless expiry
+    // The ledger formula re-applies units and multiplier, so proceeds must be the native
+    // price per single share/contract. `amount` is the total trade value, so divide it by
+    // both units and multiplier; `price` is already per single unit.
+    if (amount > 0) proceeds = amount / (units * multiplier);
+    else proceeds = price; // per-share/contract price; 0 for a worthless expiry
 
     const currency = (tx.currency && tx.currency.code)
       || (tx.symbol && tx.symbol.currency && tx.symbol.currency.code)

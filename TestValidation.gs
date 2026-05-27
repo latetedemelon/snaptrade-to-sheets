@@ -358,6 +358,7 @@ function testForexCalculations() {
  */
 function testRealizedTrades() {
   const assert = (cond, msg) => { if (!cond) throw new Error(`Assertion failed: ${msg}`); };
+  const approx = (a, b) => Math.abs(a - b) < 1e-6;
 
   Logger.log('[TEST] Starting realized trades test');
 
@@ -422,6 +423,20 @@ function testRealizedTrades() {
     return false;
   });
   assert(closeAfterOpenInGroup, 'every close has a preceding open within its instrument group');
+
+  // 3. Amount path: when the feed gives a total `amount` (not a per-unit price), proceeds must
+  // be the native price per single share/contract, so the ledger formula (units x proceeds x
+  // multiplier) reconstructs the original total — not units^2 or a multiplier-off figure.
+  const amountLegs = buildRealizedLegs([
+    { type: 'SELL', symbol: sym('AAPL'), units: 80, amount: 1200, trade_date: '2023-03-01', currency: { code: 'USD' } },
+    { type: 'SELL_TO_CLOSE', option_symbol: opt('AAPL 240119C00150000'), units: 2, amount: 1000, multiplier: 100, trade_date: '2023-07-01', currency: { code: 'USD' } },
+  ]);
+  const eqAmt = amountLegs.find((l) => l.instrumentType === 'Equity');
+  const optAmt = amountLegs.find((l) => l.instrumentType === 'Option');
+  assert(approx(eqAmt.proceeds, 15), `equity amount-path proceeds/share 15 (got ${eqAmt.proceeds})`); // 1200/80
+  assert(approx(optAmt.proceeds, 5), `option amount-path proceeds/share 5 (got ${optAmt.proceeds})`); // 1000/(2*100)
+  assert(approx(eqAmt.units * eqAmt.proceeds * eqAmt.multiplier, 1200), 'equity total reconstructs to amount');
+  assert(approx(optAmt.units * optAmt.proceeds * optAmt.multiplier, 1000), 'option total reconstructs to amount');
 
   Logger.log('[TEST] ✓ Realized trades test passed');
   return {
