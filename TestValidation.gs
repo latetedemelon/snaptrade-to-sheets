@@ -240,14 +240,14 @@ function testAcbCalculations() {
   assert(records[3].symbol === 'MSFT', 'MSFT sorts after AAPL');
 
   // 3. Diagnostics: AAPL ends at 70 units and reconciles; MSFT is an orphan sell.
-  const diagnostics = computeAcbDiagnostics(records, { AAPL: 70 }); // MSFT absent -> 0
+  const diagnostics = computeAcbDiagnostics(records, { AAPL: { units: 70, costNative: 749, currency: 'USD' } }); // MSFT absent -> 0
   assert(approx(diagnostics.AAPL.finalUnits, 70), `AAPL final units 70 (got ${diagnostics.AAPL.finalUnits})`);
   assert(diagnostics.AAPL.flagged === false, 'AAPL not flagged (reconciles to 70)');
   assert(diagnostics.MSFT.flagged === true, 'MSFT flagged (sell precedes any buy)');
   assert(diagnostics.MSFT.reason.indexOf('first activity is a sale') !== -1, 'MSFT reason mentions orphan sale');
 
   // 4. Reconciliation mismatch flags an otherwise-clean symbol.
-  const mismatch = computeAcbDiagnostics(records, { AAPL: 999 });
+  const mismatch = computeAcbDiagnostics(records, { AAPL: { units: 999, costNative: 0, currency: 'USD' } });
   assert(mismatch.AAPL.flagged === true, 'AAPL flagged when holdings disagree with ledger');
 
   Logger.log('[TEST] ✓ ACB calculation test passed');

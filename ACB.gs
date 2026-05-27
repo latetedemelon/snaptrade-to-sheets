@@ -71,11 +71,11 @@ function refreshACB() {
 
     // Reconcile against what the brokerage currently reports so an incomplete activity
     // window is surfaced rather than silently producing a wrong cost base.
-    const currentUnits = fetchCurrentUnitsBySymbol();
-    const diagnostics = computeAcbDiagnostics(records, currentUnits);
+    const positions = fetchCurrentPositionsBySymbol();
+    const diagnostics = computeAcbDiagnostics(records, positions);
 
     const ledgerInfo = writeAcbLedger(records);
-    writeCapitalGainsSummary(records, ledgerInfo, diagnostics);
+    writeCapitalGainsSummary(records, ledgerInfo, diagnostics, positions);
 
     clearToast();
     const flagged = Object.keys(diagnostics).filter((s) => diagnostics[s].flagged);
@@ -211,16 +211,17 @@ function readOpeningBalances() {
 }
 
 /**
- * Returns the current share count per symbol, pooled across all accounts, from the
- * holdings endpoint. Used to reconcile the ledger and detect incomplete history.
- * Returns null if holdings cannot be fetched (reconciliation is then skipped).
- * @returns {Object|null} map of symbol -> units
+ * Returns current positions per symbol, pooled across all accounts, from the holdings
+ * endpoint: units, broker-reported book cost (units x average_purchase_price), and native
+ * currency. Used to reconcile the ledger against current holdings and the broker's average
+ * cost. Returns null if holdings cannot be fetched (reconciliation is then skipped).
+ * @returns {Object|null} map of symbol -> {units, costNative, currency}
  */
-function fetchCurrentUnitsBySymbol() {
+function fetchCurrentPositionsBySymbol() {
   try {
     const accounts = snapTradeRequest('GET', '/api/v1/accounts', {}, null) || [];
     const holdingsMap = fetchAccountDataInParallel(accounts, 'holdings');
-    const unitsBySymbol = {};
+    const bySymbol = {};
 
     accounts.forEach((account) => {
       const holdings = holdingsMap[account.id];
@@ -228,13 +229,18 @@ function fetchCurrentUnitsBySymbol() {
       holdings.positions.forEach((position) => {
         const info = extractSymbolInfo(position.symbol);
         if (!info.symbol || info.symbol === 'N/A') return;
-        unitsBySymbol[info.symbol] = (unitsBySymbol[info.symbol] || 0) + (Number(position.units) || 0);
+        const units = Number(position.units) || 0;
+        const avg = Number(position.average_purchase_price) || 0;
+        const currency = (position.currency && position.currency.code) || 'USD';
+        if (!bySymbol[info.symbol]) bySymbol[info.symbol] = { units: 0, costNative: 0, currency: currency };
+        bySymbol[info.symbol].units += units;
+        bySymbol[info.symbol].costNative += units * avg;
       });
     });
 
-    return unitsBySymbol;
+    return bySymbol;
   } catch (error) {
-    Logger.log(`[fetchCurrentUnitsBySymbol] Reconciliation skipped: ${error.message}`);
+    Logger.log(`[fetchCurrentPositionsBySymbol] Reconciliation skipped: ${error.message}`);
     return null;
   }
 }
@@ -245,10 +251,10 @@ function fetchCurrentUnitsBySymbol() {
  * when the ledger's final share count disagrees with the brokerage's current holdings —
  * all signs that activity history is missing earlier transactions.
  * @param {Array<Object>} records - Sorted records
- * @param {Object|null} currentUnits - map of symbol -> current units (or null)
+ * @param {Object|null} positions - map of symbol -> {units, costNative, currency} (or null)
  * @returns {Object} map of symbol -> {finalUnits, currentUnits, flagged, reason}
  */
-function computeAcbDiagnostics(records, currentUnits) {
+function computeAcbDiagnostics(records, positions) {
   const bySymbol = {};
 
   records.forEach((rec) => {
@@ -267,7 +273,7 @@ function computeAcbDiagnostics(records, currentUnits) {
 
   Object.keys(bySymbol).forEach((symbol) => {
     const d = bySymbol[symbol];
-    const cur = currentUnits ? (currentUnits[symbol] || 0) : null;
+    const cur = positions ? (positions[symbol] ? positions[symbol].units : 0) : null;
     const reasons = [];
     if (d.firstIsSell) reasons.push('first activity is a sale');
     if (d.wentNegative) reasons.push('units went negative');
@@ -396,8 +402,9 @@ function writeAcbLedger(records) {
  * @param {Array<Object>} records - Sorted records
  * @param {{lastDataRow: number, symbolLastRow: Object}} ledgerInfo
  * @param {Object} diagnostics - map of symbol -> completeness diagnostics
+ * @param {Object|null} positions - map of symbol -> {units, costNative, currency}
  */
-function writeCapitalGainsSummary(records, ledgerInfo, diagnostics) {
+function writeCapitalGainsSummary(records, ledgerInfo, diagnostics, positions) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(ACB_SUMMARY_SHEET) || ss.insertSheet(ACB_SUMMARY_SHEET);
   sheet.clear();
@@ -414,13 +421,29 @@ function writeCapitalGainsSummary(records, ledgerInfo, diagnostics) {
   const section1 = [[
     'Symbol', 'Ledger Units', 'Total ACB (CAD)', 'ACB/Unit (CAD)',
     'Realized G/L All-Time (CAD)', 'Realized G/L This Year (CAD)',
-    'Holdings Units', 'Status',
+    'Holdings Units', 'Status', 'Broker Avg Cost (native)', 'Cost Check',
   ]];
 
-  symbols.forEach((symbol) => {
+  symbols.forEach((symbol, idx) => {
+    const row = idx + 2; // sheet row for this symbol
     const lr = ledgerInfo.symbolLastRow[symbol];
     const q = `"${symbol.replace(/"/g, '""')}"`;
     const diag = diagnostics[symbol] || {};
+    const pos = positions ? positions[symbol] : null;
+    const brokerAvg = pos && pos.units ? round4(pos.costNative / pos.units) : '';
+
+    // Soft cost reconciliation: compare our CAD ACB/unit (col D) to the broker's average
+    // cost (col I). Only comparable when the security trades in CAD; otherwise the broker
+    // figure is native and our ACB is CAD, so we don't flag. Never blocks.
+    let costCheck;
+    if (!pos || !pos.units) {
+      costCheck = '';
+    } else if (pos.currency === 'CAD') {
+      costCheck = `=IF($I${row}="","",IF(ABS($D${row}-$I${row})<=0.01,"OK","⚠ Trust broker "&TEXT($I${row},"0.00")&" (ACB "&TEXT($D${row},"0.00")&") — likely a spreadsheet bug"))`;
+    } else {
+      costCheck = `n/a (native ${pos.currency} ≠ CAD)`;
+    }
+
     section1.push([
       symbol,
       `=${ledger}!$L${lr}`,
@@ -430,6 +453,8 @@ function writeCapitalGainsSummary(records, ledgerInfo, diagnostics) {
       `=SUMPRODUCT((${cRange}=${q})*(${dRange}="SELL")*(YEAR(${aRange})=YEAR(TODAY()))*${oRange})`,
       diag.currentUnits === null || diag.currentUnits === undefined ? '' : round4(diag.currentUnits),
       diag.reason || 'OK',
+      brokerAvg,
+      costCheck,
     ]);
   });
 
@@ -440,6 +465,7 @@ function writeCapitalGainsSummary(records, ledgerInfo, diagnostics) {
       sheet.getRange(2, col, symbols.length, 1).setNumberFormat(CONFIG.SHEETS.CURRENCY_FORMAT);
     });
     sheet.getRange(2, 7, symbols.length, 1).setNumberFormat('#,##0.####'); // holdings units
+    sheet.getRange(2, 9, symbols.length, 1).setNumberFormat(CONFIG.SHEETS.CURRENCY_FORMAT); // broker avg cost
   }
 
   // Explain the completeness caveat directly on the sheet.

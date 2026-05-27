@@ -57,14 +57,18 @@ silently wrong result. The calculator guards against this in three ways:
 
 1. **Widest possible request.** History is requested from `1990-01-01` to today, so the API
    returns everything it has.
-2. **Reconciliation + flags.** After building the ledger, the final share count for each
-   symbol is compared against the units the brokerage currently reports (from the holdings
-   endpoint). The **Status** column on the Capital Gains sheet flags any symbol where:
-   - the ledger's units disagree with current holdings,
-   - a sale appears before any buy, or
-   - running units ever go negative.
-   A flag means earlier activity is probably missing and the ACB for that symbol is not
-   trustworthy.
+2. **Reconciliation + flags (soft checks).** After building the ledger, the final share
+   count for each symbol is compared against the units the brokerage currently reports
+   (holdings endpoint). The **Status** column on the Capital Gains sheet flags any symbol
+   where the ledger's units disagree with current holdings, a sale appears before any buy,
+   or running units ever go negative. A flag means earlier activity is probably missing and
+   the ACB for that symbol is not trustworthy. The **Cost Check** column does the same for
+   cost: it compares our CAD ACB/unit against the broker's reported average cost
+   (`average_purchase_price`) for CAD-listed securities. All cross-checks **soft-fail** —
+   they never block the calculation; on a conflict they show the canonical source value with
+   a small note that the discrepancy is most likely a bug in this tool, not bad data.
+   (The Accounts sheet does the same for cash, cross-checking the holdings-derived figure
+   against the dedicated `/balances` endpoint and showing buying power / margin.)
 3. **Opening balances (the fix).** Create a sheet named **`ACB Opening Balances`** to seed
    cost base that predates the window. Columns:
 

@@ -534,7 +534,7 @@ function createDefaultAccountRow(account, options = {}) {
     ];
   }
   
-  // For accounts sheet: [institution, accountName, accountId, cash, holdingsValue, totalValue, currency, totalCAD, lastUpdate, rawData]
+  // For accounts sheet: [institution, accountName, accountId, cash, holdingsValue, totalValue, currency, totalCAD, buyingPower, balanceCheck, lastUpdate, rawData]
   return [
     account.institution_name || '',
     account.name || account.number,
@@ -544,9 +544,27 @@ function createDefaultAccountRow(account, options = {}) {
     0, // Total Value
     'USD',
     '', // Total (CAD)
+    '', // Buying Power
+    '', // Balance Check
     (account.sync_status && account.sync_status.holdings && account.sync_status.holdings.last_successful_sync) || '',
     JSON.stringify(account),
   ];
+}
+
+/**
+ * Cross-checks the cash we derived from the holdings endpoint against the authoritative
+ * cash from the /balances endpoint. This is a soft check: it never blocks a refresh. On a
+ * conflict it surfaces the canonical /balances figure and a small warning that the
+ * discrepancy is likely a bug in this tool, not bad data.
+ * @param {number} derivedCash - Cash computed from holdings.balances
+ * @param {?{cash: number, buyingPower: number}} authoritative - From the /balances endpoint
+ * @returns {string}
+ */
+function computeBalanceCheck(derivedCash, authoritative) {
+  if (!authoritative) return 'No /balances data';
+  const diff = Math.abs(derivedCash - authoritative.cash);
+  if (diff <= 0.01) return 'OK';
+  return `⚠ Trust /balances ${authoritative.cash.toFixed(2)} (derived ${derivedCash.toFixed(2)}) — likely a spreadsheet bug`;
 }
 
 /**
@@ -590,6 +608,25 @@ function calculateBalanceByCurrency(holdings) {
     });
   }
   
+  return byCurrency;
+}
+
+/**
+ * Builds a currency->{cash, buyingPower} map from a /balances endpoint response (a flat
+ * array of balance objects). Used to cross-check the cash we derive from the holdings
+ * endpoint and to surface margin buying power.
+ * @param {Array} balancesArray - Response from /accounts/{id}/balances
+ * @returns {Object} map of currency code to {cash, buyingPower}
+ */
+function extractBalancesByCurrency(balancesArray) {
+  const byCurrency = {};
+  if (!Array.isArray(balancesArray)) return byCurrency;
+  balancesArray.forEach((balance) => {
+    const code = (balance.currency && balance.currency.code) || 'USD';
+    if (!byCurrency[code]) byCurrency[code] = { cash: 0, buyingPower: 0 };
+    byCurrency[code].cash += balance.cash || balance.total || balance.available || 0;
+    byCurrency[code].buyingPower += balance.buying_power || 0;
+  });
   return byCurrency;
 }
 
@@ -1189,44 +1226,52 @@ function refreshAccounts() {
       'Total Value',
       'Currency',
       'Total (CAD)',
+      'Buying Power',
+      'Balance Check',
       'Last Update',
       'Raw Data',
     ]);
 
     const rows = [];
-    
+
     showToast(`Fetching holdings for ${accounts.length} accounts...`, 'SnapTrade', -1);
-    // Fetch holdings for all accounts in parallel
+    // Fetch holdings and balances for all accounts in parallel. The dedicated /balances
+    // endpoint is the authoritative cash figure and is used to cross-check the cash we
+    // derive from the holdings endpoint, and to surface margin buying power.
     const holdingsMap = fetchAccountDataInParallel(accounts, 'holdings');
-    
+    const balancesMap = fetchAccountDataInParallel(accounts, 'balances');
+
     showToast('Processing data...', 'SnapTrade', -1);
     // Fetch holdings for each account to calculate complete picture
     accounts.forEach((account) => {
       const holdings = holdingsMap[account.id];
-      
+      const balByCurrency = extractBalancesByCurrency(balancesMap[account.id]);
+
       // Log if holdings is null or undefined, but still include the account with zero values
       if (!holdings) {
         Logger.log(`No holdings data returned for account ${account.id} (${account.name || account.number}). Including account with zero values.`);
         rows.push(createDefaultAccountRow(account));
         return;
       }
-      
+
       // Use helper function to calculate balance by currency
       const byCurrency = calculateBalanceByCurrency(holdings);
-      
+
       // If no currencies found (empty holdings), create a default entry
       if (Object.keys(byCurrency).length === 0) {
         Logger.log(`No currency data found for account ${account.id} (${account.name || account.number}). Adding with zero values.`);
         rows.push(createDefaultAccountRow(account));
         return;
       }
-      
+
       // Create a row for each currency
       Object.keys(byCurrency).forEach((currencyCode) => {
         const cash = byCurrency[currencyCode].cash;
         const holdingsValue = byCurrency[currencyCode].holdingsValue;
         const totalValue = cash + holdingsValue;
-        
+        const authoritative = balByCurrency[currencyCode];
+        const balanceCheck = computeBalanceCheck(cash, authoritative);
+
         rows.push([
           account.institution_name || '',
           account.name || account.number,
@@ -1236,6 +1281,8 @@ function refreshAccounts() {
           totalValue,
           currencyCode,
           '', // Total (CAD) - will be filled with formula
+          authoritative ? authoritative.buyingPower : '',
+          balanceCheck,
           (account.sync_status && account.sync_status.holdings && account.sync_status.holdings.last_successful_sync) || '',
           JSON.stringify(account),
         ]);
@@ -1252,9 +1299,9 @@ function refreshAccounts() {
       // Set all formulas at once
       sheet.getRange(2, 8, rows.length, 1).setFormulasR1C1(totalCADFormulas);
       
-      // Format currency columns (Cash, Holdings Value, Total Value, Total (CAD))
+      // Format currency columns (Cash, Holdings Value, Total Value, Total (CAD), Buying Power)
       const currencyFormat = CONFIG.SHEETS.CURRENCY_FORMAT;
-      const currencyCols = CONFIG.SHEETS.COLUMNS.ACCOUNTS.CURRENCY_COLS;
+      const currencyCols = CONFIG.SHEETS.COLUMNS.ACCOUNTS.CURRENCY_COLS.concat([9]);
       currencyCols.forEach(col => {
         sheet.getRange(2, col, rows.length, 1).setNumberFormat(currencyFormat);
       });
@@ -1267,10 +1314,9 @@ function refreshAccounts() {
     // which causes Google Sheets' persistent "working" indicator
     // Users can manually resize columns if needed via Format → Resize columns
     
-    // Hide Account ID (column 3), Last Update (column 9), and Raw Data (column 10) by default
+    // Hide Account ID (column 3), Last Update (column 11), and Raw Data (column 12) by default
     sheet.hideColumns(3, 1); // Hide Account ID (column 3)
-    sheet.hideColumns(9, 1); // Hide Last Update (column 9)
-    sheet.hideColumns(10, 1); // Hide Raw Data (column 10)
+    sheet.hideColumns(11, 2); // Hide Last Update (11) and Raw Data (12)
     
     // Automatically update account history (once per day) - pass the already-fetched holdings
     try {
