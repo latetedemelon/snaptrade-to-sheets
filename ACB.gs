@@ -46,17 +46,17 @@ const ACB_TYPE_KEYWORDS = {
  * writes the ACB Ledger and Capital Gains sheets.
  */
 function refreshACB() {
-  const debug = isDebugMode();
   try {
     showToast('Fetching activity history…', 'ACB', -1);
+    debugLog('refreshACB', 'start');
 
     const activities = fetchAllActivities();
-    if (debug) Logger.log(`[refreshACB] Retrieved ${activities.length} activities`);
+    debugLog('refreshACB', `retrieved ${activities.length} activities`);
 
     // Seed cost base that predates the available activity window (optional).
     const openingRecords = readOpeningBalances();
     const records = openingRecords.concat(buildAcbRecords(activities));
-    if (debug) Logger.log(`[refreshACB] ${records.length} records (${openingRecords.length} opening)`);
+    debugLog('refreshACB', `${records.length} records (${openingRecords.length} opening)`);
 
     if (records.length === 0) {
       clearToast();
@@ -79,6 +79,8 @@ function refreshACB() {
 
     clearToast();
     const flagged = Object.keys(diagnostics).filter((s) => diagnostics[s].flagged);
+    debugLog('refreshACB', `done: ${ledgerInfo.symbolCount} symbol(s), ${flagged.length} flagged`,
+      flagged.map((s) => `${s}: ${diagnostics[s].reason}`));
     let message = `Calculated ACB for ${ledgerInfo.symbolCount} symbol(s) across ${records.length} transactions. ` +
       'See the "ACB Ledger" and "Capital Gains" sheets.';
     if (flagged.length > 0) {
@@ -89,7 +91,7 @@ function refreshACB() {
     SpreadsheetApp.getUi().alert(message);
   } catch (error) {
     clearToast();
-    Logger.log(`[refreshACB] ${error.message}`);
+    debugLog('refreshACB', 'error', error.stack || error.message);
     SpreadsheetApp.getUi().alert(`Error calculating ACB: ${error.message}`);
   }
 }

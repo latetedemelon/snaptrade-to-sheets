@@ -56,6 +56,7 @@ try {
   src += 'this.__incomeResult = testIncomeTracker();\n';
   src += 'this.__optionsResult = testOptionsExtraction();\n';
   src += 'this.__forexResult = testForexCalculations();\n';
+  src += 'this.__debugResult = testDebugLogHelper();\n';
   vm.runInNewContext(src, sandbox, { filename: 'logic-test-bundle.js' });
 
   const r = sandbox.__acbResult;
@@ -74,6 +75,9 @@ try {
   const fx = sandbox.__forexResult;
   if (!fx || fx.records !== 4) throw new Error(`Forex: expected 4 records, got ${fx && fx.records}`);
   pass('Forex logic test (testForexCalculations)');
+
+  if (!sandbox.__debugResult || !sandbox.__debugResult.ok) throw new Error('Debug-log helper test did not pass');
+  pass('Debug-log logic test (testDebugLogHelper)');
 } catch (e) {
   fail(`logic test — ${e.message}`);
 }

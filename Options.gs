@@ -15,6 +15,7 @@ const DEFAULT_OPTION_MULTIPLIER = 100;
 function refreshOptions() {
   try {
     showToast('Fetching accounts…', 'Options', -1);
+    debugLog('refreshOptions', 'start');
     const accounts = snapTradeRequest('GET', '/api/v1/accounts', {}, null) || [];
     const holdingsMap = fetchAccountDataInParallel(accounts, 'holdings');
 
@@ -84,11 +85,12 @@ function refreshOptions() {
     formatSheetHeader(sheet);
     sheet.setFrozenRows(1);
 
+    debugLog('refreshOptions', `wrote ${rows.length} option position(s) from ${accounts.length} accounts`);
     clearToast();
     SpreadsheetApp.getUi().alert(`Refreshed ${rows.length} option position(s) from ${accounts.length} accounts.`);
   } catch (error) {
     clearToast();
-    Logger.log(`[refreshOptions] ${error.message}`);
+    debugLog('refreshOptions', 'error', error.stack || error.message);
     SpreadsheetApp.getUi().alert(`Error refreshing options: ${error.message}`);
   }
 }

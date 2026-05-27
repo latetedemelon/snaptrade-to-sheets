@@ -148,18 +148,25 @@ function snapTradeRequest(method, path, additionalParams, body) {
     options.payload = JSON.stringify(body);
   }
 
+  const startMs = Date.now();
+  // Log endpoint + param keys only (never values) so secrets are not written to the log.
+  debugLog('snapTradeRequest', `→ ${method} ${path}`, Object.keys(additionalParams || {}));
+
   const response = UrlFetchApp.fetch(`https://api.snaptrade.com${path}?${sortedQuery}`, options);
   const code = response.getResponseCode();
   const content = response.getContentText();
+  debugLog('snapTradeRequest', `← ${method} ${path} ${code} in ${Date.now() - startMs}ms (${content.length} bytes)`);
 
   if (code >= 200 && code < 300) {
     return safeJsonParse(content, `SnapTrade ${method} ${path}`);
   }
 
   if (code === 429) {
+    debugLog('snapTradeRequest', `rate limited on ${method} ${path}`);
     throw new Error('Rate limited. Please wait before making more requests.');
   }
 
+  debugLog('snapTradeRequest', `error ${code} on ${method} ${path}`, content);
   throw new Error(`SnapTrade API Error (${code}): ${content}`);
 }
 
@@ -184,7 +191,7 @@ function snapTradeRequestWithRetry(method, path, params, body, maxRetries) {
       const isServerError = error.message.includes('500') || error.message.includes('502');
 
       if ((isRateLimited || isServerError) && attempt < retries - 1) {
-        Logger.log(`Attempt ${attempt + 1} failed. Retrying in ${delay}ms...`);
+        debugLog('snapTradeRequestWithRetry', `attempt ${attempt + 1} failed, retrying in ${delay}ms`, error.message);
         Utilities.sleep(delay);
         delay *= 2;
       } else {
@@ -212,15 +219,10 @@ function snapTradeRequestWithRetry(method, path, params, body, maxRetries) {
  * @returns {Object} Map of accountId to response data
  */
 function fetchAccountDataInParallel(accounts, endpointSuffix) {
-  const debug = isDebugMode();
-  
-  if (debug) {
-    Logger.log(`[fetchAccountDataInParallel] Fetching ${endpointSuffix} for ${accounts.length} accounts in parallel`);
-  }
-  
   if (!accounts || accounts.length === 0) {
     return {};
   }
+  debugLog('fetchAccountDataInParallel', `fetching "${endpointSuffix}" for ${accounts.length} account(s)`);
   
   const context = getSnapTradeContext();
 
@@ -264,15 +266,12 @@ function fetchAccountDataInParallel(accounts, endpointSuffix) {
       if (code >= 200 && code < 300) {
         try {
           resultMap[account.id] = safeJsonParse(content, `${endpointSuffix} for account ${account.id}`);
-          if (debug) {
-            Logger.log(`[fetchAccountDataInParallel] Fetched ${endpointSuffix} for account ${account.id}`);
-          }
         } catch (error) {
-          Logger.log(`[fetchAccountDataInParallel] Parse error for account ${account.id}: ${error.message}`);
+          debugLog('fetchAccountDataInParallel', `parse error for account ${account.id}`, error.message);
           failed.push(account);
         }
       } else {
-        Logger.log(`[fetchAccountDataInParallel] Error fetching ${endpointSuffix} for account ${account.id} (${code}): ${content}`);
+        debugLog('fetchAccountDataInParallel', `HTTP ${code} for account ${account.id} (${endpointSuffix})`, content);
         failed.push(account);
       }
     });
@@ -282,15 +281,13 @@ function fetchAccountDataInParallel(accounts, endpointSuffix) {
 
   for (let start = 0; start < accounts.length; start += BATCH_SIZE) {
     const batch = accounts.slice(start, start + BATCH_SIZE);
-    if (debug) {
-      Logger.log(`[fetchAccountDataInParallel] Executing batch of ${batch.length} requests`);
-    }
+    debugLog('fetchAccountDataInParallel', `executing batch of ${batch.length} request(s)`);
 
     const failed = runBatch(batch);
 
     // Retry failed accounts once before marking them unavailable.
     if (failed.length > 0) {
-      if (debug) Logger.log(`[fetchAccountDataInParallel] Retrying ${failed.length} failed account(s)`);
+      debugLog('fetchAccountDataInParallel', `retrying ${failed.length} failed account(s)`);
       Utilities.sleep(CONFIG.API.INITIAL_RETRY_DELAY_MS);
       const stillFailed = runBatch(failed);
       stillFailed.forEach((account) => {
@@ -299,10 +296,7 @@ function fetchAccountDataInParallel(accounts, endpointSuffix) {
     }
   }
 
-  if (debug) {
-    Logger.log(`[fetchAccountDataInParallel] Completed fetch for ${Object.keys(resultMap).length} accounts`);
-  }
-
+  debugLog('fetchAccountDataInParallel', `completed: ${Object.keys(resultMap).length} of ${accounts.length} account(s) returned data`);
   return resultMap;
 }
 
@@ -730,8 +724,10 @@ function clearAllData() {
   PropertiesService.getScriptProperties().deleteAllProperties();
   PropertiesService.getUserProperties().deleteAllProperties();
 
+  __DEBUG_MODE_CACHE = false;
+  __DEBUG_LOG_SHEET = null;
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-  const targets = ['Accounts', 'Holdings', 'Transactions', 'Account History'];
+  const targets = ['Accounts', 'Holdings', 'Transactions', 'Account History', DEBUG_LOG_SHEET];
 
   targets.forEach((name) => {
     const sheet = spreadsheet.getSheetByName(name);
@@ -741,36 +737,139 @@ function clearAllData() {
   });
 }
 
+/** Sheet that receives user-visible troubleshooting logs when debug mode is on. */
+const DEBUG_LOG_SHEET = 'Debug Log';
+
+/** Per-execution caches so logging doesn't hit PropertiesService / getSheetByName each call. */
+var __DEBUG_MODE_CACHE = null;
+var __DEBUG_LOG_SHEET = null;
+
 /**
- * Enables or disables debug mode for verbose logging.
+ * Enables or disables debug mode for verbose, user-visible troubleshooting logs.
  * @param {boolean} enabled - True to enable debug mode, false to disable
  */
 function setDebugMode(enabled) {
   const userProps = PropertiesService.getUserProperties();
   if (enabled) {
     userProps.setProperty('DEBUG_MODE', 'true');
-    SpreadsheetApp.getUi().alert('Debug mode enabled. Verbose logging will appear in execution logs.');
+    __DEBUG_MODE_CACHE = true;
+    getDebugLogSheet_(); // create the sheet up front so it's easy to find
+    SpreadsheetApp.getUi().alert(
+      'Debug mode is ON.\n\nVerbose troubleshooting logs will be written to the "' + DEBUG_LOG_SHEET +
+      '" sheet (and the Apps Script execution log). Reproduce the problem, then read that sheet ' +
+      'or send it along when reporting an issue.\n\nTurn debug mode off when you are done — it ' +
+      'makes refreshes slower.'
+    );
   } else {
     userProps.deleteProperty('DEBUG_MODE');
-    SpreadsheetApp.getUi().alert('Debug mode disabled.');
+    __DEBUG_MODE_CACHE = false;
+    SpreadsheetApp.getUi().alert('Debug mode is OFF.');
   }
 }
 
 /**
- * Checks if debug mode is currently enabled.
+ * Checks if debug mode is currently enabled (cached per execution).
  * @returns {boolean} True if debug mode is enabled
  */
 function isDebugMode() {
-  const userProps = PropertiesService.getUserProperties();
-  return userProps.getProperty('DEBUG_MODE') === 'true';
+  if (__DEBUG_MODE_CACHE === null) {
+    __DEBUG_MODE_CACHE = PropertiesService.getUserProperties().getProperty('DEBUG_MODE') === 'true';
+  }
+  return __DEBUG_MODE_CACHE;
 }
 
 /**
  * Toggles debug mode on/off.
  */
 function toggleDebugMode() {
-  const currentMode = isDebugMode();
-  setDebugMode(!currentMode);
+  setDebugMode(!isDebugMode());
+}
+
+/**
+ * Verbose troubleshooting log. Always writes to the Apps Script execution log; when debug
+ * mode is on it ALSO appends a timestamped row to a visible "Debug Log" sheet so problems can
+ * be diagnosed without opening the script editor. Rows are written immediately (not buffered)
+ * so they survive a crash or 6-minute timeout — which is exactly when they matter.
+ *
+ * Use for high-level events (API calls, counts, flags, errors); avoid calling inside large
+ * per-row loops, which would flood the sheet and slow the run.
+ * @param {string} context - Short tag for where the log came from (e.g. 'snapTradeRequest')
+ * @param {string} message
+ * @param {*} [data] - Optional structured detail; stringified and truncated
+ */
+function debugLog(context, message, data) {
+  const hasData = data !== undefined;
+  const detail = hasData ? safeStringifyForLog_(data) : '';
+  Logger.log(hasData ? `[${context}] ${message} | ${detail}` : `[${context}] ${message}`);
+  if (!isDebugMode()) return;
+  try {
+    getDebugLogSheet_().appendRow([new Date(), context, message, detail]);
+  } catch (e) {
+    Logger.log(`[debugLog] Could not write to ${DEBUG_LOG_SHEET}: ${e.message}`);
+  }
+}
+
+/**
+ * Lazily creates/returns the Debug Log sheet (cached per execution).
+ * @returns {GoogleAppsScript.Spreadsheet.Sheet}
+ */
+function getDebugLogSheet_() {
+  if (__DEBUG_LOG_SHEET) return __DEBUG_LOG_SHEET;
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(DEBUG_LOG_SHEET);
+  if (!sheet) {
+    sheet = ss.insertSheet(DEBUG_LOG_SHEET);
+    sheet.appendRow(['Timestamp', 'Context', 'Message', 'Data']);
+    formatSheetHeader(sheet);
+    sheet.setColumnWidth(1, 150);
+    sheet.setColumnWidth(3, 320);
+    sheet.setColumnWidth(4, 480);
+  }
+  __DEBUG_LOG_SHEET = sheet;
+  return sheet;
+}
+
+/**
+ * Safely stringifies arbitrary log data, truncating very long output.
+ * @param {*} data
+ * @returns {string}
+ */
+function safeStringifyForLog_(data) {
+  let str;
+  try {
+    str = typeof data === 'string' ? data : JSON.stringify(data);
+  } catch (e) {
+    str = String(data);
+  }
+  if (str && str.length > 5000) str = str.substring(0, 5000) + '…[truncated]';
+  return str || '';
+}
+
+/**
+ * Clears the Debug Log sheet contents (keeps the header). Menu action.
+ */
+function clearDebugLog() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(DEBUG_LOG_SHEET);
+  if (!sheet || sheet.getLastRow() < 2) {
+    SpreadsheetApp.getUi().alert('Debug Log is already empty.');
+    return;
+  }
+  sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).clearContent();
+  SpreadsheetApp.getUi().alert('Debug Log cleared.');
+}
+
+/**
+ * Activates the Debug Log sheet so the user can read it. Menu action.
+ */
+function showDebugLog() {
+  const sheet = getDebugLogSheet_();
+  SpreadsheetApp.setActiveSheet(sheet);
+  if (sheet.getLastRow() < 2) {
+    SpreadsheetApp.getUi().alert(
+      'Debug Log is empty. Turn on Debug Mode, reproduce the problem, then come back here.'
+    );
+  }
 }
 
 /**
@@ -1199,8 +1298,7 @@ function refreshHoldings() {
     SpreadsheetApp.getUi().alert(message);
   } catch (error) {
     const errorMsg = `Error refreshing holdings: ${error.message}`;
-    Logger.log(`[refreshHoldings] ${errorMsg}`);
-    Logger.log(`[refreshHoldings] Stack trace: ${error.stack}`);
+    debugLog('refreshHoldings', 'error', error.stack || error.message);
     SpreadsheetApp.getUi().alert(errorMsg);
   }
 }
@@ -1339,7 +1437,7 @@ function refreshAccounts() {
   } catch (error) {
     clearToast();
     SpreadsheetApp.getUi().alert(`Error refreshing accounts: ${error.message}`);
-    Logger.log(`refreshAccounts error: ${error.message}`);
+    debugLog('refreshAccounts', 'error', error.stack || error.message);
     clearToast();
   }
 }
@@ -1357,7 +1455,7 @@ function trackAccountHistory() {
     SpreadsheetApp.getUi().alert(`Tracked ${accounts.length} account values at ${timestamp.toLocaleString()}.`);
   } catch (error) {
     SpreadsheetApp.getUi().alert(`Error tracking account history: ${error.message}`);
-    Logger.log(`trackAccountHistory error: ${error.message}`);
+    debugLog('trackAccountHistory', 'error', error.stack || error.message);
   }
 }
 
@@ -1582,7 +1680,7 @@ function refreshTransactions(startDate, endDate) {
     SpreadsheetApp.getUi().alert(`Refreshed ${rows.length} transactions.`);
   } catch (error) {
     SpreadsheetApp.getUi().alert(`Error refreshing transactions: ${error.message}`);
-    Logger.log(`refreshTransactions error: ${error.message}`);
+    debugLog('refreshTransactions', 'error', error.stack || error.message);
   }
 }
 
@@ -1625,7 +1723,9 @@ function onOpen(e) {
         .addItem('Configure API Keys', 'showApiKeyDialog')
         .addItem('Register User', 'showRegisterDialog')
         .addItem('Broker Capabilities', 'showBrokerStatusDialog')
-        .addItem('Toggle Debug Mode', 'toggleDebugMode')
+        .addItem('🐞 Toggle Debug Mode', 'toggleDebugMode')
+        .addItem('🐞 View Debug Log', 'showDebugLog')
+        .addItem('🐞 Clear Debug Log', 'clearDebugLog')
         .addItem('Help & Docs', 'showHelpDialog')
         .addItem('Clear All Data', 'clearAllData')
     )

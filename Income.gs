@@ -31,8 +31,10 @@ const INCOME_CATEGORIES = ['Dividend', 'Interest', 'Distribution', 'Tax Withheld
 function refreshIncome() {
   try {
     showToast('Fetching activity history…', 'Income', -1);
+    debugLog('refreshIncome', 'start');
     const activities = fetchAllActivities();
     const records = buildIncomeRecords(activities);
+    debugLog('refreshIncome', `built ${records.length} income record(s) from ${activities.length} activities`);
 
     if (records.length === 0) {
       clearToast();
@@ -47,7 +49,7 @@ function refreshIncome() {
     SpreadsheetApp.getUi().alert(`Tracked ${records.length} income events. See the "Income" sheet.`);
   } catch (error) {
     clearToast();
-    Logger.log(`[refreshIncome] ${error.message}`);
+    debugLog('refreshIncome', 'error', error.stack || error.message);
     SpreadsheetApp.getUi().alert(`Error tracking income: ${error.message}`);
   }
 }

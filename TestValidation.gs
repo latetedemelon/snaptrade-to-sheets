@@ -346,6 +346,30 @@ function testForexCalculations() {
 }
 
 /**
+ * Tests the pure debug-log string helper (truncation + safe stringify). No credentials needed.
+ */
+function testDebugLogHelper() {
+  const assert = (cond, msg) => { if (!cond) throw new Error(`Assertion failed: ${msg}`); };
+
+  Logger.log('[TEST] Starting debug-log helper test');
+
+  assert(safeStringifyForLog_('hello') === 'hello', 'string passthrough');
+  assert(safeStringifyForLog_({ a: 1 }) === '{"a":1}', 'object stringified');
+  assert(safeStringifyForLog_(undefined) === '', 'undefined -> empty');
+
+  const big = safeStringifyForLog_('x'.repeat(6000));
+  assert(big.length < 6000 && big.indexOf('[truncated]') !== -1, 'long output truncated');
+
+  // Circular references must not throw.
+  const circular = {}; circular.self = circular;
+  const out = safeStringifyForLog_(circular);
+  assert(typeof out === 'string', 'circular reference handled without throwing');
+
+  Logger.log('[TEST] ✓ Debug-log helper test passed');
+  return { ok: true };
+}
+
+/**
  * Runs all validation tests.
  */
 function runAllValidationTests() {
@@ -383,6 +407,12 @@ function runAllValidationTests() {
     results.forex = testForexCalculations();
   } catch (error) {
     Logger.log(`Failed: testForexCalculations - ${error.message}`);
+  }
+
+  try {
+    results.debugLog = testDebugLogHelper();
+  } catch (error) {
+    Logger.log(`Failed: testDebugLogHelper - ${error.message}`);
   }
 
   try {

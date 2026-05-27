@@ -30,6 +30,11 @@ etc.) into a single history.
 - **Forex capital gains** (`Forex.gs`): a "Forex Ledger" and "Forex Gains" sheet treating
   foreign currency as property — per-currency CAD ACB and realized FX gains by tax year,
   with the same soft completeness flagging. See [FOREX.md](FOREX.md).
+- **Debug logging**: a `debugLog()` helper plus a user-visible "Debug Log" sheet. Toggle it
+  from SnapTrade → Settings → Toggle Debug Mode (with View / Clear Debug Log actions). When
+  on, API calls, parallel fetches, per-feature counts, and errors are written to the sheet
+  (and the execution log) so issues can be diagnosed without the script editor. Endpoint param
+  values and credentials are never logged. Off by default.
 
 ### Fixed
 - Unguarded `JSON.parse` in `snapTradeRequest`, `registerSnapTradeUser`, and

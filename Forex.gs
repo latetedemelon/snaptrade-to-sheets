@@ -24,8 +24,10 @@ const FOREX_SUMMARY_SHEET = 'Forex Gains';
 function refreshForex() {
   try {
     showToast('Fetching activity history…', 'Forex', -1);
+    debugLog('refreshForex', 'start');
     const activities = fetchAllActivities();
     const records = buildForexRecords(activities);
+    debugLog('refreshForex', `built ${records.length} forex movement(s) from ${activities.length} activities`);
 
     if (records.length === 0) {
       clearToast();
@@ -43,6 +45,8 @@ function refreshForex() {
 
     clearToast();
     const flagged = Object.keys(diagnostics).filter((c) => diagnostics[c].flagged);
+    debugLog('refreshForex', `done: ${ledgerInfo.currencyCount} currency/currencies, ${flagged.length} flagged`,
+      flagged.map((c) => `${c}: ${diagnostics[c].reason}`));
     let message = `Tracked ${records.length} foreign-currency movements across ${ledgerInfo.currencyCount} currency/currencies. ` +
       'See the "Forex Ledger" and "Forex Gains" sheets.';
     if (flagged.length > 0) {
@@ -52,7 +56,7 @@ function refreshForex() {
     SpreadsheetApp.getUi().alert(message);
   } catch (error) {
     clearToast();
-    Logger.log(`[refreshForex] ${error.message}`);
+    debugLog('refreshForex', 'error', error.stack || error.message);
     SpreadsheetApp.getUi().alert(`Error tracking forex: ${error.message}`);
   }
 }
