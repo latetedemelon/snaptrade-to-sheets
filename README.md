@@ -1,3 +1,5 @@
+[![Donate](https://img.shields.io/badge/Donate-PayPal-green.svg)](https://paypal.me/latetedemelon) [![Donate](https://img.shields.io/badge/Donate-Buy%20Me%20a%20Coffee-yellow)](https://buymeacoffee.com/latetedemelon) [![Donate](https://img.shields.io/badge/Donate-Ko--Fi-ff69b4)](https://ko-fi.com/latetedemelon)
+
 # SnapTrade Google Sheets Integration
 
 A Google Sheets add-on that connects your brokerage accounts to Google Sheets, enabling automated portfolio tracking, transaction history, and account balance monitoring directly in your spreadsheets.
