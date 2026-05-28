@@ -482,6 +482,60 @@ function testReconciliationGuards() {
 }
 
 /**
+ * Tests the unrealized P/L pooling (buildPnlBySymbol) from a fixed fixture. No creds needed.
+ * Two accounts both hold AAPL (which must pool) and one also holds MSFT.
+ */
+function testUnrealizedPnl() {
+  const assert = (cond, msg) => { if (!cond) throw new Error(`Assertion failed: ${msg}`); };
+  const approx = (a, b) => Math.abs(a - b) < 1e-6;
+
+  Logger.log('[TEST] Starting unrealized P/L test');
+
+  const sym = (s) => ({ symbol: s, description: s, currency: { code: 'USD' } });
+  const accounts = [{ id: 'acct-1', name: 'RRSP' }, { id: 'acct-2', name: 'TFSA' }];
+  const holdingsMap = {
+    'acct-1': {
+      positions: [
+        { symbol: sym('AAPL'), units: 100, price: 15, average_purchase_price: 10, currency: { code: 'USD' } },
+        { symbol: sym('MSFT'), units: 20, price: 30, average_purchase_price: 25, currency: { code: 'USD' } },
+      ],
+    },
+    'acct-2': {
+      positions: [
+        { symbol: sym('AAPL'), units: 50, price: 15, average_purchase_price: 12, currency: { code: 'USD' } },
+      ],
+    },
+  };
+
+  const rows = buildPnlBySymbol(accounts, holdingsMap);
+  assert(rows.length === 2, `2 pooled symbols (got ${rows.length})`);
+
+  const aapl = rows.find((r) => r.symbol === 'AAPL');
+  const msft = rows.find((r) => r.symbol === 'MSFT');
+  assert(aapl && msft, 'both AAPL and MSFT present');
+
+  // AAPL pools across both accounts: 100 + 50 units.
+  assert(approx(aapl.units, 150), `AAPL units pooled to 150 (got ${aapl.units})`);
+  // Market value: 100*15 + 50*15 = 2250.
+  assert(approx(aapl.marketValue, 2250), `AAPL market value 2250 (got ${aapl.marketValue})`);
+  // Book value: 100*10 + 50*12 = 1600.
+  assert(approx(aapl.bookValue, 1600), `AAPL book value 1600 (got ${aapl.bookValue})`);
+  // Gain/Loss = MV - BV.
+  assert(approx(aapl.gainLoss, aapl.marketValue - aapl.bookValue), 'AAPL gainLoss = MV - BV');
+  assert(approx(aapl.gainLoss, 650), `AAPL gainLoss 650 (got ${aapl.gainLoss})`);
+
+  // MSFT from a single account.
+  assert(approx(msft.units, 20), `MSFT units 20 (got ${msft.units})`);
+  assert(approx(msft.gainLoss, msft.marketValue - msft.bookValue), 'MSFT gainLoss = MV - BV');
+
+  // Sorted by market value descending (AAPL 2250 before MSFT 600).
+  assert(rows[0].symbol === 'AAPL', 'rows sorted by market value descending');
+
+  Logger.log('[TEST] ✓ Unrealized P/L test passed');
+  return { symbols: rows.length, aaplUnits: aapl.units, aaplGainLoss: aapl.gainLoss };
+}
+
+/**
  * Tests the pure debug-log string helper (truncation + safe stringify). No credentials needed.
  */
 function testDebugLogHelper() {
@@ -555,6 +609,12 @@ function runAllValidationTests() {
     results.reconciliation = testReconciliationGuards();
   } catch (error) {
     Logger.log(`Failed: testReconciliationGuards - ${error.message}`);
+  }
+
+  try {
+    results.unrealizedPnl = testUnrealizedPnl();
+  } catch (error) {
+    Logger.log(`Failed: testUnrealizedPnl - ${error.message}`);
   }
 
   try {

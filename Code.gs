@@ -1724,6 +1724,7 @@ function onOpen(e) {
     .addItem('📊 Refresh Accounts', 'refreshAccounts')
     .addItem('💰 Refresh Holdings', 'refreshHoldings')
     .addItem('🎯 Refresh Options', 'refreshOptions')
+    .addItem('📈 Unrealized P/L', 'refreshUnrealizedPnl')
     .addItem('📜 Refresh Transactions', 'showTransactionDialog')
     .addItem('📐 Calculate ACB / Capital Gains', 'refreshACB')
     .addItem('💵 Income & Dividends', 'refreshIncome')
