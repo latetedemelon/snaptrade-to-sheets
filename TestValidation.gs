@@ -570,8 +570,56 @@ function testRollChains() {
   assert(approx(aapl.netCredit, 200), `AAPL net credit 200 (got ${aapl.netCredit})`);
   assert(aapl.rolls === 0, `AAPL no rolls (got ${aapl.rolls})`);
 
+  // Break-even (short puts): latest strike − net credit per share. AAPL: 1 contract, strike 16,
+  // net 200 → 200/100 = 2.00/share → 16 − 2 = 14.
+  assert(approx(aapl.netCreditPerShare, 2), `AAPL net credit/share 2 (got ${aapl.netCreditPerShare})`);
+  assert(approx(aapl.breakEven, 14), `AAPL break-even 14 (got ${aapl.breakEven})`);
+  // SOFI: 3 contracts, strike 16, net 769 → 769/300 = 2.5633/share → 16 − 2.5633 = 13.4367.
+  assert(Math.abs(sofi.breakEven - 13.4367) < 0.01, `SOFI break-even ~13.44 (got ${sofi.breakEven})`);
+
   Logger.log('[TEST] ✓ Roll chains test passed');
   return { chains: chains.length, sofiNet: sofi.netCredit, sofiRolls: sofi.rolls };
+}
+
+/**
+ * Tests the Wheel per-underlying roll-up: option premiums + dividends reduce the stock cost
+ * basis to an effective basis / break-even. No credentials needed.
+ */
+function testWheel() {
+  const assert = (cond, msg) => { if (!cond) throw new Error(`Assertion failed: ${msg}`); };
+  const approx = (a, b) => Math.abs(a - b) < 1e-6;
+
+  Logger.log('[TEST] Starting wheel test');
+
+  const put = (t) => ({ ticker: t, option_type: 'PUT', strike_price: 16, underlying_symbol: { symbol: t.split(' ')[0] } });
+  const call = (t) => ({ ticker: t, option_type: 'CALL', strike_price: 18, underlying_symbol: { symbol: t.split(' ')[0] } });
+  const eqSym = (s) => ({ symbol: s, description: s, currency: { code: 'USD' } });
+  const activities = [
+    // SOFI: sold a put (+200), sold a call (+150), collected a dividend (+30).
+    { type: 'SELL_TO_OPEN', option_symbol: put('SOFI 260821P00016000'), units: 1, amount: 200, trade_date: '2023-06-01', currency: { code: 'USD' } },
+    { type: 'SELL_TO_OPEN', option_symbol: call('SOFI 260821C00018000'), units: 1, amount: 150, trade_date: '2023-08-01', currency: { code: 'USD' } },
+    { type: 'DIVIDEND', symbol: eqSym('SOFI'), amount: 30, trade_date: '2023-07-15', currency: { code: 'USD' } },
+    // AAPL: only sold a put, never assigned (no shares).
+    { type: 'SELL_TO_OPEN', option_symbol: put('AAPL 260116P00150000'), units: 1, amount: 300, trade_date: '2023-09-01', currency: { code: 'USD' } },
+  ];
+  // SOFI assigned 100 shares at $16 (cost 1600); AAPL holds none.
+  const positions = { SOFI: { units: 100, costNative: 1600, currency: 'USD' } };
+
+  const rows = buildWheelByUnderlying(activities, positions);
+  assert(rows.length === 2, `2 underlyings (got ${rows.length})`);
+
+  const sofi = rows.find((r) => r.underlying === 'SOFI');
+  assert(approx(sofi.netPut, 200) && approx(sofi.netCall, 150) && approx(sofi.dividends, 30), 'SOFI premiums/dividends');
+  assert(approx(sofi.tripleIncome, 380), `SOFI triple income 380 (got ${sofi.tripleIncome})`);
+  assert(approx(sofi.effectiveBasis, 1220), `SOFI effective basis 1220 (got ${sofi.effectiveBasis})`); // 1600-380
+  assert(approx(sofi.breakEven, 12.2), `SOFI break-even 12.20 (got ${sofi.breakEven})`);              // 1220/100
+
+  const aapl = rows.find((r) => r.underlying === 'AAPL');
+  assert(approx(aapl.netPut, 300) && aapl.shares === 0, 'AAPL put-only, no shares');
+  assert(aapl.breakEven === '', 'AAPL break-even blank with no shares');
+
+  Logger.log('[TEST] ✓ Wheel test passed');
+  return { rows: rows.length, sofiBreakEven: sofi.breakEven };
 }
 
 /**
@@ -742,6 +790,12 @@ function runAllValidationTests() {
     results.rollChains = testRollChains();
   } catch (error) {
     Logger.log(`Failed: testRollChains - ${error.message}`);
+  }
+
+  try {
+    results.wheel = testWheel();
+  } catch (error) {
+    Logger.log(`Failed: testWheel - ${error.message}`);
   }
 
   try {

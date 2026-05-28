@@ -7,6 +7,13 @@ etc.) into a single history.
 ## Unreleased
 
 ### Added
+- **Wheel / triple-income** (`Wheel.gs`): a per-underlying "Wheel" sheet rolling up net put
+  premium + net call premium + dividends ("triple income") against the equity cost basis to
+  show an **effective cost basis and break-even per share**. Aggregates per underlying, so it
+  works without having to detect the strategy. Trade-management view (tax sheets unchanged).
+- **Roll Chains break-even**: added **Net Credit / Share**, **Latest Strike**, and **Break-even
+  if Assigned** (latest short-put strike − net credit/share) columns — your initial sell plus
+  every roll credit, expressed as an effective entry price.
 - **Summary dashboard** (`Summary.gs`): a "Summary" sheet pulling the other sheets together with
   live formulas — headline totals, YTD income / realized gains / FX / fees, a net-worth line
   chart from Account History, allocation pie charts by account and currency, and a top-holdings

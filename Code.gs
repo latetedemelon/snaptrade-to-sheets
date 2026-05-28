@@ -1733,6 +1733,7 @@ function onOpen(e) {
     .addItem('🧾 Fees', 'refreshFees')
     .addItem('🔁 Realized Trades', 'refreshRealizedTrades')
     .addItem('♻️ Roll Chains', 'refreshRollChains')
+    .addItem('🎡 Wheel / Income', 'refreshWheel')
     .addSeparator()
     .addItem('📈 Track Account History', 'trackAccountHistory')
     .addSeparator()
