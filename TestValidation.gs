@@ -200,6 +200,215 @@ function compareSequentialVsParallel() {
 }
 
 /**
+ * Tests the ACB classification, record-building, and completeness diagnostics using a
+ * fixed in-memory fixture. Requires no SnapTrade credentials. The running ACB / capital
+ * gains math itself lives in sheet formulas and is verified with the worked example in
+ * docs/ACB.md.
+ */
+function testAcbCalculations() {
+  const assert = (cond, msg) => { if (!cond) throw new Error(`Assertion failed: ${msg}`); };
+  const approx = (a, b) => Math.abs(a - b) < 1e-6;
+
+  Logger.log('[TEST] Starting ACB calculation test');
+
+  // 1. Activity classification.
+  assert(classifyAcbActivity({ type: 'BUY' }) === 'BUY', 'BUY classifies as BUY');
+  assert(classifyAcbActivity({ type: 'Sell' }) === 'SELL', 'Sell classifies as SELL');
+  assert(classifyAcbActivity({ type: 'DIVIDEND', units: 2 }) === 'BUY', 'reinvested dividend is a BUY');
+  assert(classifyAcbActivity({ type: 'DIVIDEND', units: 0 }) === null, 'cash dividend is ignored');
+  assert(classifyAcbActivity({ type: 'RETURN OF CAPITAL' }) === 'ROC', 'ROC classifies as ROC');
+  assert(classifyAcbActivity({ type: 'INTEREST' }) === null, 'interest is ignored');
+  assert(classifyAcbActivity({ type: 'BUY', option_symbol: {} }) === null, 'options are ignored');
+
+  // 2. Record building from a fixture (two AAPL buys, one AAPL sell, one orphan MSFT sell).
+  const sym = (s) => ({ symbol: s, description: s, currency: { code: 'USD' } });
+  const activities = [
+    { type: 'BUY', symbol: sym('AAPL'), units: 100, price: 10, fee: 5, trade_date: '2023-01-10', currency: { code: 'USD' }, account: { name: 'RRSP' } },
+    { type: 'BUY', symbol: sym('AAPL'), units: 50, price: 12, fee: 0, trade_date: '2023-02-01', currency: { code: 'USD' }, account: { name: 'RRSP' } },
+    { type: 'SELL', symbol: sym('AAPL'), units: 80, price: 15, fee: 5, trade_date: '2023-03-01', currency: { code: 'USD' }, account: { name: 'RRSP' } },
+    { type: 'SELL', symbol: sym('MSFT'), units: 10, price: 20, fee: 0, trade_date: '2023-01-05', currency: { code: 'USD' }, account: { name: 'TFSA' } },
+    { type: 'INTEREST', symbol: sym('CASH'), amount: 1.23, trade_date: '2023-01-31', currency: { code: 'USD' } },
+  ];
+
+  const records = buildAcbRecords(activities);
+  assert(records.length === 4, `4 records built (got ${records.length})`);
+
+  sortAcbRecords(records);
+  // Sorted by symbol then date: AAPL(buy,buy,sell) then MSFT(sell).
+  assert(records[0].symbol === 'AAPL' && records[0].action === 'BUY', 'first record is AAPL BUY');
+  assert(records[2].action === 'SELL', 'third AAPL record is the SELL');
+  assert(records[3].symbol === 'MSFT', 'MSFT sorts after AAPL');
+
+  // 3. Diagnostics: AAPL ends at 70 units and reconciles; MSFT is an orphan sell.
+  const diagnostics = computeAcbDiagnostics(records, { AAPL: { units: 70, costNative: 749, currency: 'USD' } }); // MSFT absent -> 0
+  assert(approx(diagnostics.AAPL.finalUnits, 70), `AAPL final units 70 (got ${diagnostics.AAPL.finalUnits})`);
+  assert(diagnostics.AAPL.flagged === false, 'AAPL not flagged (reconciles to 70)');
+  assert(diagnostics.MSFT.flagged === true, 'MSFT flagged (sell precedes any buy)');
+  assert(diagnostics.MSFT.reason.indexOf('first activity is a sale') !== -1, 'MSFT reason mentions orphan sale');
+
+  // 4. Reconciliation mismatch flags an otherwise-clean symbol.
+  const mismatch = computeAcbDiagnostics(records, { AAPL: { units: 999, costNative: 0, currency: 'USD' } });
+  assert(mismatch.AAPL.flagged === true, 'AAPL flagged when holdings disagree with ledger');
+
+  Logger.log('[TEST] ✓ ACB calculation test passed');
+  return { records: records.length, aaplFinalUnits: diagnostics.AAPL.finalUnits, flagged: ['MSFT'] };
+}
+
+/**
+ * Tests income classification and record-building from a fixed fixture. No credentials needed.
+ */
+function testIncomeTracker() {
+  const assert = (cond, msg) => { if (!cond) throw new Error(`Assertion failed: ${msg}`); };
+
+  Logger.log('[TEST] Starting income tracker test');
+
+  assert(classifyIncomeActivity({ type: 'DIVIDEND' }) === 'Dividend', 'DIVIDEND -> Dividend');
+  assert(classifyIncomeActivity({ type: 'INTEREST' }) === 'Interest', 'INTEREST -> Interest');
+  assert(classifyIncomeActivity({ type: 'DISTRIBUTION' }) === 'Distribution', 'DISTRIBUTION -> Distribution');
+  assert(classifyIncomeActivity({ type: 'NON_RESIDENT_TAX' }) === 'Tax Withheld', 'NR tax -> Tax Withheld');
+  assert(classifyIncomeActivity({ type: 'BUY' }) === null, 'BUY is not income');
+
+  const sym = (s) => ({ symbol: s, description: s, currency: { code: 'USD' } });
+  const activities = [
+    { type: 'DIVIDEND', symbol: sym('VTI'), amount: 50, trade_date: '2023-03-15', currency: { code: 'USD' }, account: { name: 'RRSP' } },
+    { type: 'INTEREST', amount: 5, trade_date: '2023-04-01', currency: { code: 'CAD' }, account: { name: 'Cash' } },
+    { type: 'NON_RESIDENT_TAX', symbol: sym('VTI'), amount: -7.5, trade_date: '2023-03-15', currency: { code: 'USD' } },
+    { type: 'BUY', symbol: sym('VTI'), amount: -1000, trade_date: '2023-02-01', currency: { code: 'USD' } },
+    { type: 'DIVIDEND', symbol: sym('XEQT'), amount: 0, trade_date: '2023-05-01', currency: { code: 'CAD' } }, // reinvested-as-units: no cash
+  ];
+
+  const records = buildIncomeRecords(activities);
+  assert(records.length === 3, `3 income records (got ${records.length})`);
+  const cats = records.map((r) => r.category).sort();
+  assert(cats.join(',') === 'Dividend,Interest,Tax Withheld', `categories (got ${cats.join(',')})`);
+
+  // Timezone-safe date parsing: calendar day/year preserved regardless of zone.
+  assert(parseActivityDate_('2024-01-01').getFullYear() === 2024, 'Jan 1 stays in its year (no UTC rollback)');
+  assert(parseActivityDate_('2023-12-31').getDate() === 31, 'Dec 31 calendar day preserved');
+  assert(parseActivityDate_('') === null, 'empty date -> null');
+
+  Logger.log('[TEST] ✓ Income tracker test passed');
+  return { records: records.length };
+}
+
+/**
+ * Tests option contract extraction across the nesting variations. No credentials needed.
+ */
+function testOptionsExtraction() {
+  const assert = (cond, msg) => { if (!cond) throw new Error(`Assertion failed: ${msg}`); };
+
+  Logger.log('[TEST] Starting options extraction test');
+
+  // Nested: position.symbol.option_symbol with an underlying_symbol object.
+  const a = extractOptionInfo({
+    symbol: { option_symbol: { ticker: 'AAPL 240119C00150000', option_type: 'CALL', strike_price: 150, expiration_date: '2024-01-19', underlying_symbol: { symbol: 'AAPL' } } },
+    units: 2, price: 3.5, currency: { code: 'USD' },
+  });
+  assert(a.type === 'CALL', 'type CALL');
+  assert(a.strike === 150, 'strike 150');
+  assert(a.underlying === 'AAPL', 'underlying AAPL from object');
+  assert(a.expiry === '2024-01-19', 'expiry parsed');
+
+  // Flat: option fields directly on position.option_symbol, underlying inferred from ticker.
+  const b = extractOptionInfo({ option_symbol: { ticker: 'TSLA 251219P00200000', option_type: 'put', strike_price: 200 } });
+  assert(b.type === 'PUT', 'type normalized to PUT');
+  assert(b.underlying === 'TSLA', 'underlying inferred from ticker');
+
+  Logger.log('[TEST] ✓ Options extraction test passed');
+  return { ok: true };
+}
+
+/**
+ * Tests forex (currency-as-property) record building and diagnostics. No credentials needed.
+ */
+function testForexCalculations() {
+  const assert = (cond, msg) => { if (!cond) throw new Error(`Assertion failed: ${msg}`); };
+  const approx = (a, b) => Math.abs(a - b) < 1e-6;
+
+  Logger.log('[TEST] Starting forex calculation test');
+
+  const activities = [
+    { type: 'SELL', amount: 1000, trade_date: '2023-01-10', currency: { code: 'USD' }, account: { name: 'Margin' } },
+    { type: 'BUY', amount: -600, trade_date: '2023-02-01', currency: { code: 'USD' } },
+    { type: 'DIVIDEND', amount: 50, trade_date: '2023-03-01', currency: { code: 'USD' } },
+    { type: 'INTEREST', amount: 5, trade_date: '2023-04-01', currency: { code: 'CAD' } }, // home currency ignored
+    { type: 'FEE', amount: 0, trade_date: '2023-04-02', currency: { code: 'USD' } },       // non-cash ignored
+    { type: 'BUY', amount: -200, trade_date: '2023-01-05', currency: { code: 'EUR' } },     // orphan disposition
+  ];
+
+  const records = buildForexRecords(activities);
+  assert(records.length === 4, `4 forex records (got ${records.length})`); // 3 USD + 1 EUR
+
+  sortForexRecords(records);
+  const diag = computeForexDiagnostics(records, { USD: 450 }); // EUR absent -> 0
+  assert(approx(diag.USD.finalUnits, 450), `USD balance 450 (got ${diag.USD.finalUnits})`);
+  assert(diag.USD.flagged === false, 'USD reconciles, not flagged');
+  assert(diag.EUR.flagged === true, 'EUR orphan disposition flagged');
+  assert(diag.EUR.reason.indexOf('first activity is a disposition') !== -1, 'EUR reason mentions orphan disposition');
+
+  Logger.log('[TEST] ✓ Forex calculation test passed');
+  return { records: records.length };
+}
+
+/**
+ * Tests the balance reconciliation guards: cash-field selection and tolerance. No creds needed.
+ */
+function testReconciliationGuards() {
+  const assert = (cond, msg) => { if (!cond) throw new Error(`Assertion failed: ${msg}`); };
+
+  Logger.log('[TEST] Starting reconciliation guard test');
+
+  // A real cash balance of 0 must NOT be replaced by total/available.
+  const zeroCash = extractBalancesByCurrency([
+    { currency: { code: 'USD' }, cash: 0, total: 5000, available: 5000, buying_power: 1000 },
+  ]);
+  assert(zeroCash.USD.cash === 0, `cash 0 preserved (got ${zeroCash.USD.cash})`);
+  assert(zeroCash.USD.buyingPower === 1000, 'buying power read');
+
+  // Missing cash falls back to total.
+  const fallback = extractBalancesByCurrency([{ currency: { code: 'CAD' }, total: 250 }]);
+  assert(fallback.CAD.cash === 250, `cash falls back to total (got ${fallback.CAD.cash})`);
+
+  // Buying power is not summed across duplicate balance objects.
+  const dupes = extractBalancesByCurrency([
+    { currency: { code: 'USD' }, cash: 10, buying_power: 1000 },
+    { currency: { code: 'USD' }, cash: 10, buying_power: 1000 },
+  ]);
+  assert(dupes.USD.buyingPower === 1000, `buying power not doubled (got ${dupes.USD.buyingPower})`);
+
+  // Cash check tolerates sub-cent drift but flags real differences.
+  assert(computeBalanceCheck(100.004, { cash: 100, buyingPower: 0 }) === 'OK', 'sub-cent drift OK');
+  assert(computeBalanceCheck(105, { cash: 100, buyingPower: 0 }).indexOf('Trust /balances') !== -1, 'real diff flagged');
+
+  Logger.log('[TEST] ✓ Reconciliation guard test passed');
+  return { ok: true };
+}
+
+/**
+ * Tests the pure debug-log string helper (truncation + safe stringify). No credentials needed.
+ */
+function testDebugLogHelper() {
+  const assert = (cond, msg) => { if (!cond) throw new Error(`Assertion failed: ${msg}`); };
+
+  Logger.log('[TEST] Starting debug-log helper test');
+
+  assert(safeStringifyForLog_('hello') === 'hello', 'string passthrough');
+  assert(safeStringifyForLog_({ a: 1 }) === '{"a":1}', 'object stringified');
+  assert(safeStringifyForLog_(undefined) === '', 'undefined -> empty');
+
+  const big = safeStringifyForLog_('x'.repeat(6000));
+  assert(big.length < 6000 && big.indexOf('[truncated]') !== -1, 'long output truncated');
+
+  // Circular references must not throw.
+  const circular = {}; circular.self = circular;
+  const out = safeStringifyForLog_(circular);
+  assert(typeof out === 'string', 'circular reference handled without throwing');
+
+  Logger.log('[TEST] ✓ Debug-log helper test passed');
+  return { ok: true };
+}
+
+/**
  * Runs all validation tests.
  */
 function runAllValidationTests() {
@@ -208,11 +417,49 @@ function runAllValidationTests() {
   Logger.log('========================================');
   
   const results = {
+    acb: null,
+    income: null,
     parallelFetch: null,
     historyUpdate: null,
     performance: null,
   };
-  
+
+  try {
+    results.acb = testAcbCalculations();
+  } catch (error) {
+    Logger.log(`Failed: testAcbCalculations - ${error.message}`);
+  }
+
+  try {
+    results.income = testIncomeTracker();
+  } catch (error) {
+    Logger.log(`Failed: testIncomeTracker - ${error.message}`);
+  }
+
+  try {
+    results.options = testOptionsExtraction();
+  } catch (error) {
+    Logger.log(`Failed: testOptionsExtraction - ${error.message}`);
+  }
+
+  try {
+    results.forex = testForexCalculations();
+  } catch (error) {
+    Logger.log(`Failed: testForexCalculations - ${error.message}`);
+  }
+
+  try {
+    results.reconciliation = testReconciliationGuards();
+  } catch (error) {
+    Logger.log(`Failed: testReconciliationGuards - ${error.message}`);
+  }
+
+  try {
+    results.debugLog = testDebugLogHelper();
+  } catch (error) {
+    Logger.log(`Failed: testDebugLogHelper - ${error.message}`);
+  }
+
   try {
     results.parallelFetch = testFetchAccountDataInParallel();
   } catch (error) {

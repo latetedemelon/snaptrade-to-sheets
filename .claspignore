@@ -1,0 +1,6 @@
+# Only the Apps Script sources belong in the bound script project.
+**/**
+
+!appsscript.json
+!*.gs
+!*.html

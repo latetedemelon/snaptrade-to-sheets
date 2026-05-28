@@ -90,6 +90,22 @@ function buildSortedQuery(params) {
 }
 
 /**
+ * Parses a JSON response body, raising a clear error when the body is not JSON
+ * (e.g. an HTML error page) instead of throwing an opaque SyntaxError.
+ * @param {string} content - Raw response body
+ * @param {string} context - Short label describing the call site, used in the error
+ * @returns {Object} Parsed JSON
+ */
+function safeJsonParse(content, context) {
+  try {
+    return JSON.parse(content);
+  } catch (error) {
+    const preview = (content || '').toString().trim().substring(0, 200);
+    throw new Error(`${context}: SnapTrade returned a non-JSON response. Body began with: ${preview}`);
+  }
+}
+
+/**
  * Makes an authenticated request to the SnapTrade API.
  * @param {string} method - HTTP method (GET, POST, DELETE)
  * @param {string} path - API path starting with /api/v1/
@@ -132,18 +148,25 @@ function snapTradeRequest(method, path, additionalParams, body) {
     options.payload = JSON.stringify(body);
   }
 
+  const startMs = Date.now();
+  // Log endpoint + param keys only (never values) so secrets are not written to the log.
+  debugLog('snapTradeRequest', `→ ${method} ${path}`, Object.keys(additionalParams || {}));
+
   const response = UrlFetchApp.fetch(`https://api.snaptrade.com${path}?${sortedQuery}`, options);
   const code = response.getResponseCode();
   const content = response.getContentText();
+  debugLog('snapTradeRequest', `← ${method} ${path} ${code} in ${Date.now() - startMs}ms (${content.length} bytes)`);
 
   if (code >= 200 && code < 300) {
-    return JSON.parse(content);
+    return safeJsonParse(content, `SnapTrade ${method} ${path}`);
   }
 
   if (code === 429) {
+    debugLog('snapTradeRequest', `rate limited on ${method} ${path}`);
     throw new Error('Rate limited. Please wait before making more requests.');
   }
 
+  debugLog('snapTradeRequest', `error ${code} on ${method} ${path}`, content.substring(0, 500));
   throw new Error(`SnapTrade API Error (${code}): ${content}`);
 }
 
@@ -168,7 +191,7 @@ function snapTradeRequestWithRetry(method, path, params, body, maxRetries) {
       const isServerError = error.message.includes('500') || error.message.includes('502');
 
       if ((isRateLimited || isServerError) && attempt < retries - 1) {
-        Logger.log(`Attempt ${attempt + 1} failed. Retrying in ${delay}ms...`);
+        debugLog('snapTradeRequestWithRetry', `attempt ${attempt + 1} failed, retrying in ${delay}ms`, error.message);
         Utilities.sleep(delay);
         delay *= 2;
       } else {
@@ -196,81 +219,84 @@ function snapTradeRequestWithRetry(method, path, params, body, maxRetries) {
  * @returns {Object} Map of accountId to response data
  */
 function fetchAccountDataInParallel(accounts, endpointSuffix) {
-  const debug = isDebugMode();
-  
-  if (debug) {
-    Logger.log(`[fetchAccountDataInParallel] Fetching ${endpointSuffix} for ${accounts.length} accounts in parallel`);
-  }
-  
   if (!accounts || accounts.length === 0) {
     return {};
   }
+  debugLog('fetchAccountDataInParallel', `fetching "${endpointSuffix}" for ${accounts.length} account(s)`);
   
   const context = getSnapTradeContext();
-  // Generate timestamp once and reuse for all requests in this batch.
-  // This is safe because each request has a unique path (different account IDs),
-  // which creates unique signatures even with the same timestamp.
-  // The timestamp is at second-level granularity, and all parallel requests
-  // complete within the same second.
-  const timestamp = Math.floor(Date.now() / 1000).toString();
-  
-  // Build all request objects
-  const requests = accounts.map((account) => {
+
+  // UrlFetchApp.fetchAll() caps at 100 requests per call. Stay well under that with
+  // batches of 50 so large account sets (and better error isolation) are handled.
+  const BATCH_SIZE = 50;
+  const resultMap = {};
+
+  // Builds a signed request object for one account. A fresh timestamp is generated
+  // per call so retries are not rejected for clock skew.
+  const buildRequest = (account) => {
     const path = `/api/v1/accounts/${account.id}/${endpointSuffix}`;
-    
     const params = {
       clientId: context.clientId,
-      timestamp: timestamp,
+      timestamp: Math.floor(Date.now() / 1000).toString(),
       userId: context.userId,
       userSecret: context.userSecret,
     };
-    
     const sortedQuery = buildSortedQuery(params);
     const signature = generateSnapTradeSignature(context.consumerKey, null, path, sortedQuery);
-    
     return {
       url: `https://api.snaptrade.com${path}?${sortedQuery}`,
       method: 'get',
       headers: { Signature: signature },
       muteHttpExceptions: true,
     };
-  });
-  
-  if (debug) {
-    Logger.log(`[fetchAccountDataInParallel] Executing ${requests.length} parallel requests`);
-  }
-  
-  // Execute all requests in parallel
-  const responses = UrlFetchApp.fetchAll(requests);
-  
-  // Process responses and build result map
-  const resultMap = {};
-  
-  responses.forEach((response, index) => {
-    const account = accounts[index];
-    const code = response.getResponseCode();
-    const content = response.getContentText();
-    
-    if (code >= 200 && code < 300) {
-      try {
-        resultMap[account.id] = JSON.parse(content);
-        if (debug) {
-          Logger.log(`[fetchAccountDataInParallel] Successfully fetched ${endpointSuffix} for account ${account.id}`);
+  };
+
+  // Processes a batch of accounts and returns the accounts whose fetch failed.
+  const runBatch = (batch) => {
+    const responses = UrlFetchApp.fetchAll(batch.map(buildRequest));
+    const failed = [];
+
+    responses.forEach((response, index) => {
+      const account = batch[index];
+      if (!account) return;
+
+      const code = response.getResponseCode();
+      const content = response.getContentText();
+
+      if (code >= 200 && code < 300) {
+        try {
+          resultMap[account.id] = safeJsonParse(content, `${endpointSuffix} for account ${account.id}`);
+        } catch (error) {
+          debugLog('fetchAccountDataInParallel', `parse error for account ${account.id}`, error.message);
+          failed.push(account);
         }
-      } catch (error) {
-        Logger.log(`[fetchAccountDataInParallel] Error parsing response for account ${account.id}: ${error.message}`);
-        resultMap[account.id] = null;
+      } else {
+        debugLog('fetchAccountDataInParallel', `HTTP ${code} for account ${account.id} (${endpointSuffix})`, content.substring(0, 500));
+        failed.push(account);
       }
-    } else {
-      Logger.log(`[fetchAccountDataInParallel] Error fetching ${endpointSuffix} for account ${account.id} (${code}): ${content}`);
-      resultMap[account.id] = null;
+    });
+
+    return failed;
+  };
+
+  for (let start = 0; start < accounts.length; start += BATCH_SIZE) {
+    const batch = accounts.slice(start, start + BATCH_SIZE);
+    debugLog('fetchAccountDataInParallel', `executing batch of ${batch.length} request(s)`);
+
+    const failed = runBatch(batch);
+
+    // Retry failed accounts once before marking them unavailable.
+    if (failed.length > 0) {
+      debugLog('fetchAccountDataInParallel', `retrying ${failed.length} failed account(s)`);
+      Utilities.sleep(CONFIG.API.INITIAL_RETRY_DELAY_MS);
+      const stillFailed = runBatch(failed);
+      stillFailed.forEach((account) => {
+        resultMap[account.id] = null;
+      });
     }
-  });
-  
-  if (debug) {
-    Logger.log(`[fetchAccountDataInParallel] Successfully fetched data for ${Object.keys(resultMap).length} accounts`);
   }
-  
+
+  debugLog('fetchAccountDataInParallel', `completed: ${Object.keys(resultMap).length} of ${accounts.length} account(s) returned data`);
   return resultMap;
 }
 
@@ -373,7 +399,7 @@ function registerSnapTradeUser(userId) {
   const content = response.getContentText();
 
   if (code === 200) {
-    const result = JSON.parse(content);
+    const result = safeJsonParse(content, 'registerSnapTradeUser');
     PropertiesService.getUserProperties().setProperties({
       SNAPTRADE_USER_ID: result.userId,
       SNAPTRADE_USER_SECRET: result.userSecret,
@@ -427,7 +453,7 @@ function generateConnectionPortalUrl(options) {
   const code = response.getResponseCode();
 
   if (code >= 200 && code < 300) {
-    const result = JSON.parse(content);
+    const result = safeJsonParse(content, 'generateConnectionPortalUrl');
     return result.redirectURI;
   }
 
@@ -444,12 +470,18 @@ function listUserAccounts() {
 }
 
 /**
- * Generates the CAD conversion formula for use in sheets.
- * Column structure: ... | Total Value (RC[-2]) | Currency (RC[-1]) | Total (CAD) |
+ * Generates an R1C1 CAD-conversion formula for use in sheets.
+ * Multiplies a value cell by the live GOOGLEFINANCE rate from its currency to CAD,
+ * passing the value through unchanged when the currency is CAD or blank.
+ * Defaults (currency at RC[-1], value at RC[-2]) match the Accounts/History layout.
+ * @param {number} [currencyOffset=-1] - Column offset to the currency-code cell
+ * @param {number} [valueOffset=-2] - Column offset to the value cell to convert
  * @returns {string} R1C1 formula for CAD conversion
  */
-function getCADConversionFormula() {
-  return '=IF(RC[-1]="CAD", RC[-2], IF(RC[-1]="", RC[-2], RC[-2] * GOOGLEFINANCE("CURRENCY:" & RC[-1] & "CAD")))';
+function getCADConversionFormula(currencyOffset, valueOffset) {
+  const cur = `RC[${currencyOffset === undefined ? -1 : currencyOffset}]`;
+  const val = `RC[${valueOffset === undefined ? -2 : valueOffset}]`;
+  return `=IF(${cur}="CAD", ${val}, IF(${cur}="", ${val}, ${val} * GOOGLEFINANCE("CURRENCY:" & ${cur} & "CAD")))`;
 }
 
 /**
@@ -496,7 +528,7 @@ function createDefaultAccountRow(account, options = {}) {
     ];
   }
   
-  // For accounts sheet: [institution, accountName, accountId, cash, holdingsValue, totalValue, currency, totalCAD, lastUpdate, rawData]
+  // For accounts sheet: [institution, accountName, accountId, cash, holdingsValue, totalValue, currency, totalCAD, buyingPower, balanceCheck, lastUpdate, rawData]
   return [
     account.institution_name || '',
     account.name || account.number,
@@ -506,9 +538,27 @@ function createDefaultAccountRow(account, options = {}) {
     0, // Total Value
     'USD',
     '', // Total (CAD)
+    '', // Buying Power
+    '', // Balance Check
     (account.sync_status && account.sync_status.holdings && account.sync_status.holdings.last_successful_sync) || '',
     JSON.stringify(account),
   ];
+}
+
+/**
+ * Cross-checks the cash we derived from the holdings endpoint against the authoritative
+ * cash from the /balances endpoint. This is a soft check: it never blocks a refresh. On a
+ * conflict it surfaces the canonical /balances figure and a small warning that the
+ * discrepancy is likely a bug in this tool, not bad data.
+ * @param {number} derivedCash - Cash computed from holdings.balances
+ * @param {?{cash: number, buyingPower: number}} authoritative - From the /balances endpoint
+ * @returns {string}
+ */
+function computeBalanceCheck(derivedCash, authoritative) {
+  if (!authoritative) return 'No /balances data';
+  const diff = Math.abs(derivedCash - authoritative.cash);
+  if (diff <= CASH_RECONCILE_TOLERANCE) return 'OK';
+  return `⚠ Trust /balances ${authoritative.cash.toFixed(2)} (derived ${derivedCash.toFixed(2)}) — likely a spreadsheet bug`;
 }
 
 /**
@@ -554,6 +604,35 @@ function calculateBalanceByCurrency(holdings) {
   
   return byCurrency;
 }
+
+/**
+ * Builds a currency->{cash, buyingPower} map from a /balances endpoint response (a flat
+ * array of balance objects). Used to cross-check the cash we derive from the holdings
+ * endpoint and to surface margin buying power.
+ * @param {Array} balancesArray - Response from /accounts/{id}/balances
+ * @returns {Object} map of currency code to {cash, buyingPower}
+ */
+function extractBalancesByCurrency(balancesArray) {
+  const byCurrency = {};
+  if (!Array.isArray(balancesArray)) return byCurrency;
+  balancesArray.forEach((balance) => {
+    const code = (balance.currency && balance.currency.code) || 'USD';
+    if (!byCurrency[code]) byCurrency[code] = { cash: 0, buyingPower: 0 };
+    // Prefer cash, then total, then available — but only fall back when the field is truly
+    // absent. A legitimate cash balance of 0 must not be replaced by total/available.
+    let cash = 0;
+    if (balance.cash != null) cash = balance.cash;
+    else if (balance.total != null) cash = balance.total;
+    else if (balance.available != null) cash = balance.available;
+    byCurrency[code].cash += cash;
+    // Take the reported buying power (don't sum across balance objects, which would double it).
+    if (balance.buying_power != null) byCurrency[code].buyingPower = balance.buying_power;
+  });
+  return byCurrency;
+}
+
+/** Cents-level tolerance for cross-checking cash figures (interest/rounding cause sub-cent drift). */
+const CASH_RECONCILE_TOLERANCE = 0.01;
 
 /**
  * Calculates total balance across all currencies from holdings data.
@@ -655,8 +734,10 @@ function clearAllData() {
   PropertiesService.getScriptProperties().deleteAllProperties();
   PropertiesService.getUserProperties().deleteAllProperties();
 
+  __DEBUG_MODE_CACHE = false;
+  __DEBUG_LOG_SHEET = null;
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-  const targets = ['Accounts', 'Holdings', 'Transactions', 'Account History'];
+  const targets = ['Accounts', 'Holdings', 'Transactions', 'Account History', DEBUG_LOG_SHEET];
 
   targets.forEach((name) => {
     const sheet = spreadsheet.getSheetByName(name);
@@ -666,36 +747,139 @@ function clearAllData() {
   });
 }
 
+/** Sheet that receives user-visible troubleshooting logs when debug mode is on. */
+const DEBUG_LOG_SHEET = 'Debug Log';
+
+/** Per-execution caches so logging doesn't hit PropertiesService / getSheetByName each call. */
+var __DEBUG_MODE_CACHE = null;
+var __DEBUG_LOG_SHEET = null;
+
 /**
- * Enables or disables debug mode for verbose logging.
+ * Enables or disables debug mode for verbose, user-visible troubleshooting logs.
  * @param {boolean} enabled - True to enable debug mode, false to disable
  */
 function setDebugMode(enabled) {
   const userProps = PropertiesService.getUserProperties();
   if (enabled) {
     userProps.setProperty('DEBUG_MODE', 'true');
-    SpreadsheetApp.getUi().alert('Debug mode enabled. Verbose logging will appear in execution logs.');
+    __DEBUG_MODE_CACHE = true;
+    getDebugLogSheet_(); // create the sheet up front so it's easy to find
+    SpreadsheetApp.getUi().alert(
+      'Debug mode is ON.\n\nVerbose troubleshooting logs will be written to the "' + DEBUG_LOG_SHEET +
+      '" sheet (and the Apps Script execution log). Reproduce the problem, then read that sheet ' +
+      'or send it along when reporting an issue.\n\nTurn debug mode off when you are done — it ' +
+      'makes refreshes slower.'
+    );
   } else {
     userProps.deleteProperty('DEBUG_MODE');
-    SpreadsheetApp.getUi().alert('Debug mode disabled.');
+    __DEBUG_MODE_CACHE = false;
+    SpreadsheetApp.getUi().alert('Debug mode is OFF.');
   }
 }
 
 /**
- * Checks if debug mode is currently enabled.
+ * Checks if debug mode is currently enabled (cached per execution).
  * @returns {boolean} True if debug mode is enabled
  */
 function isDebugMode() {
-  const userProps = PropertiesService.getUserProperties();
-  return userProps.getProperty('DEBUG_MODE') === 'true';
+  if (__DEBUG_MODE_CACHE === null) {
+    __DEBUG_MODE_CACHE = PropertiesService.getUserProperties().getProperty('DEBUG_MODE') === 'true';
+  }
+  return __DEBUG_MODE_CACHE;
 }
 
 /**
  * Toggles debug mode on/off.
  */
 function toggleDebugMode() {
-  const currentMode = isDebugMode();
-  setDebugMode(!currentMode);
+  setDebugMode(!isDebugMode());
+}
+
+/**
+ * Verbose troubleshooting log. Always writes to the Apps Script execution log; when debug
+ * mode is on it ALSO appends a timestamped row to a visible "Debug Log" sheet so problems can
+ * be diagnosed without opening the script editor. Rows are written immediately (not buffered)
+ * so they survive a crash or 6-minute timeout — which is exactly when they matter.
+ *
+ * Use for high-level events (API calls, counts, flags, errors); avoid calling inside large
+ * per-row loops, which would flood the sheet and slow the run.
+ * @param {string} context - Short tag for where the log came from (e.g. 'snapTradeRequest')
+ * @param {string} message
+ * @param {*} [data] - Optional structured detail; stringified and truncated
+ */
+function debugLog(context, message, data) {
+  const hasData = data !== undefined;
+  const detail = hasData ? safeStringifyForLog_(data) : '';
+  Logger.log(hasData ? `[${context}] ${message} | ${detail}` : `[${context}] ${message}`);
+  if (!isDebugMode()) return;
+  try {
+    getDebugLogSheet_().appendRow([new Date(), context, message, detail]);
+  } catch (e) {
+    Logger.log(`[debugLog] Could not write to ${DEBUG_LOG_SHEET}: ${e.message}`);
+  }
+}
+
+/**
+ * Lazily creates/returns the Debug Log sheet (cached per execution).
+ * @returns {GoogleAppsScript.Spreadsheet.Sheet}
+ */
+function getDebugLogSheet_() {
+  if (__DEBUG_LOG_SHEET) return __DEBUG_LOG_SHEET;
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(DEBUG_LOG_SHEET);
+  if (!sheet) {
+    sheet = ss.insertSheet(DEBUG_LOG_SHEET);
+    sheet.appendRow(['Timestamp', 'Context', 'Message', 'Data']);
+    formatSheetHeader(sheet);
+    sheet.setColumnWidth(1, 150);
+    sheet.setColumnWidth(3, 320);
+    sheet.setColumnWidth(4, 480);
+  }
+  __DEBUG_LOG_SHEET = sheet;
+  return sheet;
+}
+
+/**
+ * Safely stringifies arbitrary log data, truncating very long output.
+ * @param {*} data
+ * @returns {string}
+ */
+function safeStringifyForLog_(data) {
+  let str;
+  try {
+    str = typeof data === 'string' ? data : JSON.stringify(data);
+  } catch (e) {
+    str = String(data);
+  }
+  if (str && str.length > 5000) str = str.substring(0, 5000) + '…[truncated]';
+  return str || '';
+}
+
+/**
+ * Clears the Debug Log sheet contents (keeps the header). Menu action.
+ */
+function clearDebugLog() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(DEBUG_LOG_SHEET);
+  if (!sheet || sheet.getLastRow() < 2) {
+    SpreadsheetApp.getUi().alert('Debug Log is already empty.');
+    return;
+  }
+  sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).clearContent();
+  SpreadsheetApp.getUi().alert('Debug Log cleared.');
+}
+
+/**
+ * Activates the Debug Log sheet so the user can read it. Menu action.
+ */
+function showDebugLog() {
+  const sheet = getDebugLogSheet_();
+  SpreadsheetApp.setActiveSheet(sheet);
+  if (sheet.getLastRow() < 2) {
+    SpreadsheetApp.getUi().alert(
+      'Debug Log is empty. Turn on Debug Mode, reproduce the problem, then come back here.'
+    );
+  }
 }
 
 /**
@@ -1078,18 +1262,17 @@ function refreshHoldings() {
       const costBasisCADFormulas = [];
       const gainLossCADFormulas = [];
       
+      // Currency is col 6; CAD columns reference it plus their native-value column.
+      const priceCAD = getCADConversionFormula(-4, -5);        // col 10 <- Currency(6), Price(5)
+      const marketValueCAD = getCADConversionFormula(-5, -4);  // col 11 <- Currency(6), Market Value(7)
+      const costBasisCAD = getCADConversionFormula(-6, -4);    // col 12 <- Currency(6), Cost Basis(8)
+      const gainLossCAD = getCADConversionFormula(-7, -4);     // col 13 <- Currency(6), Gain/Loss(9)
+
       for (let i = 0; i < rows.length; i++) {
-        const rowNum = i + 2; // Data starts at row 2
-        
-        // Using R1C1 notation: RC[x] means same row, column offset by x
-        // Price (CAD) in col 10: references Currency (col 6, offset -4) and Price (col 5, offset -5)
-        priceCADFormulas.push([`=IF(RC[-4]="CAD", RC[-5], IF(RC[-4]="", RC[-5], RC[-5] * GOOGLEFINANCE("CURRENCY:" & RC[-4] & "CAD")))`]);
-        // Market Value (CAD) in col 11: references Currency (col 6, offset -5) and Market Value (col 7, offset -4)
-        marketValueCADFormulas.push([`=IF(RC[-5]="CAD", RC[-4], IF(RC[-5]="", RC[-4], RC[-4] * GOOGLEFINANCE("CURRENCY:" & RC[-5] & "CAD")))`]);
-        // Cost Basis (CAD) in col 12: references Currency (col 6, offset -6) and Cost Basis (col 8, offset -4)
-        costBasisCADFormulas.push([`=IF(RC[-6]="CAD", RC[-4], IF(RC[-6]="", RC[-4], RC[-4] * GOOGLEFINANCE("CURRENCY:" & RC[-6] & "CAD")))`]);
-        // Gain/Loss (CAD) in col 13: references Currency (col 6, offset -7) and Gain/Loss (col 9, offset -4)
-        gainLossCADFormulas.push([`=IF(RC[-7]="CAD", RC[-4], IF(RC[-7]="", RC[-4], RC[-4] * GOOGLEFINANCE("CURRENCY:" & RC[-7] & "CAD")))`]);
+        priceCADFormulas.push([priceCAD]);
+        marketValueCADFormulas.push([marketValueCAD]);
+        costBasisCADFormulas.push([costBasisCAD]);
+        gainLossCADFormulas.push([gainLossCAD]);
       }
       
       // Set all formulas at once
@@ -1125,8 +1308,7 @@ function refreshHoldings() {
     SpreadsheetApp.getUi().alert(message);
   } catch (error) {
     const errorMsg = `Error refreshing holdings: ${error.message}`;
-    Logger.log(`[refreshHoldings] ${errorMsg}`);
-    Logger.log(`[refreshHoldings] Stack trace: ${error.stack}`);
+    debugLog('refreshHoldings', 'error', error.stack || error.message);
     SpreadsheetApp.getUi().alert(errorMsg);
   }
 }
@@ -1152,44 +1334,52 @@ function refreshAccounts() {
       'Total Value',
       'Currency',
       'Total (CAD)',
+      'Buying Power',
+      'Balance Check',
       'Last Update',
       'Raw Data',
     ]);
 
     const rows = [];
-    
+
     showToast(`Fetching holdings for ${accounts.length} accounts...`, 'SnapTrade', -1);
-    // Fetch holdings for all accounts in parallel
+    // Fetch holdings and balances for all accounts in parallel. The dedicated /balances
+    // endpoint is the authoritative cash figure and is used to cross-check the cash we
+    // derive from the holdings endpoint, and to surface margin buying power.
     const holdingsMap = fetchAccountDataInParallel(accounts, 'holdings');
-    
+    const balancesMap = fetchAccountDataInParallel(accounts, 'balances');
+
     showToast('Processing data...', 'SnapTrade', -1);
     // Fetch holdings for each account to calculate complete picture
     accounts.forEach((account) => {
       const holdings = holdingsMap[account.id];
-      
+      const balByCurrency = extractBalancesByCurrency(balancesMap[account.id]);
+
       // Log if holdings is null or undefined, but still include the account with zero values
       if (!holdings) {
         Logger.log(`No holdings data returned for account ${account.id} (${account.name || account.number}). Including account with zero values.`);
         rows.push(createDefaultAccountRow(account));
         return;
       }
-      
+
       // Use helper function to calculate balance by currency
       const byCurrency = calculateBalanceByCurrency(holdings);
-      
+
       // If no currencies found (empty holdings), create a default entry
       if (Object.keys(byCurrency).length === 0) {
         Logger.log(`No currency data found for account ${account.id} (${account.name || account.number}). Adding with zero values.`);
         rows.push(createDefaultAccountRow(account));
         return;
       }
-      
+
       // Create a row for each currency
       Object.keys(byCurrency).forEach((currencyCode) => {
         const cash = byCurrency[currencyCode].cash;
         const holdingsValue = byCurrency[currencyCode].holdingsValue;
         const totalValue = cash + holdingsValue;
-        
+        const authoritative = balByCurrency[currencyCode];
+        const balanceCheck = computeBalanceCheck(cash, authoritative);
+
         rows.push([
           account.institution_name || '',
           account.name || account.number,
@@ -1199,6 +1389,8 @@ function refreshAccounts() {
           totalValue,
           currencyCode,
           '', // Total (CAD) - will be filled with formula
+          authoritative ? authoritative.buyingPower : '',
+          balanceCheck,
           (account.sync_status && account.sync_status.holdings && account.sync_status.holdings.last_successful_sync) || '',
           JSON.stringify(account),
         ]);
@@ -1215,9 +1407,9 @@ function refreshAccounts() {
       // Set all formulas at once
       sheet.getRange(2, 8, rows.length, 1).setFormulasR1C1(totalCADFormulas);
       
-      // Format currency columns (Cash, Holdings Value, Total Value, Total (CAD))
+      // Format currency columns (Cash, Holdings Value, Total Value, Total (CAD), Buying Power)
       const currencyFormat = CONFIG.SHEETS.CURRENCY_FORMAT;
-      const currencyCols = CONFIG.SHEETS.COLUMNS.ACCOUNTS.CURRENCY_COLS;
+      const currencyCols = CONFIG.SHEETS.COLUMNS.ACCOUNTS.CURRENCY_COLS.concat([9]);
       currencyCols.forEach(col => {
         sheet.getRange(2, col, rows.length, 1).setNumberFormat(currencyFormat);
       });
@@ -1230,10 +1422,9 @@ function refreshAccounts() {
     // which causes Google Sheets' persistent "working" indicator
     // Users can manually resize columns if needed via Format → Resize columns
     
-    // Hide Account ID (column 3), Last Update (column 9), and Raw Data (column 10) by default
+    // Hide Account ID (column 3), Last Update (column 11), and Raw Data (column 12) by default
     sheet.hideColumns(3, 1); // Hide Account ID (column 3)
-    sheet.hideColumns(9, 1); // Hide Last Update (column 9)
-    sheet.hideColumns(10, 1); // Hide Raw Data (column 10)
+    sheet.hideColumns(11, 2); // Hide Last Update (11) and Raw Data (12)
     
     // Automatically update account history (once per day) - pass the already-fetched holdings
     try {
@@ -1256,7 +1447,7 @@ function refreshAccounts() {
   } catch (error) {
     clearToast();
     SpreadsheetApp.getUi().alert(`Error refreshing accounts: ${error.message}`);
-    Logger.log(`refreshAccounts error: ${error.message}`);
+    debugLog('refreshAccounts', 'error', error.stack || error.message);
     clearToast();
   }
 }
@@ -1274,7 +1465,7 @@ function trackAccountHistory() {
     SpreadsheetApp.getUi().alert(`Tracked ${accounts.length} account values at ${timestamp.toLocaleString()}.`);
   } catch (error) {
     SpreadsheetApp.getUi().alert(`Error tracking account history: ${error.message}`);
-    Logger.log(`trackAccountHistory error: ${error.message}`);
+    debugLog('trackAccountHistory', 'error', error.stack || error.message);
   }
 }
 
@@ -1437,57 +1628,73 @@ function refreshTransactions(startDate, endDate) {
       'Description',
       'Category',
       'Account',
+      'Symbol',
+      'Units',
+      'Price',
+      'Fee',
       'Attachment',
       'Transaction ID',
       'Raw Data',
     ]);
 
-    const rows = transactions.map((tx) => [
-      tx.trade_date || tx.settlement_date,
-      tx.amount || 0,
-      '', // Amount (CAD) - will be filled with formula
-      (tx.currency && tx.currency.code) || (tx.symbol && tx.symbol.currency && tx.symbol.currency.code) || 'USD', // Try to get currency from transaction
-      tx.description || '',
-      tx.type,
-      (tx.account && (tx.account.name || tx.account.number)) || '',
-      '',
-      tx.id || '',
-      JSON.stringify(tx),
-    ]);
+    const rows = transactions.map((tx) => {
+      const symbolInfo = extractSymbolInfo(tx.symbol);
+      const symbol = symbolInfo.symbol === 'N/A' ? '' : symbolInfo.symbol;
+      const rawDate = tx.trade_date || tx.settlement_date || '';
+      const parsedDate = parseActivityDate_(rawDate);
+      return [
+        parsedDate || rawDate, // real Date when parseable (needed for trade-date FX), else raw
+        tx.amount || 0,
+        '', // Amount (CAD) - will be filled with formula
+        (tx.currency && tx.currency.code) || (tx.symbol && tx.symbol.currency && tx.symbol.currency.code) || 'USD', // Try to get currency from transaction
+        tx.description || '',
+        tx.type,
+        (tx.account && (tx.account.name || tx.account.number)) || '',
+        symbol,
+        tx.units || '',
+        tx.price || '',
+        tx.fee || '',
+        '',
+        tx.id || '',
+        JSON.stringify(tx),
+      ];
+    });
 
     if (rows.length > 0) {
       sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
-      
-      // Add formulas for CAD conversion using R1C1 notation for batch operations
-      // Column D is Currency (col 4), B is Amount (col 2)
+
+      // Amount (CAD) = native Amount (col B) x the trade-date FX rate, keyed on Currency
+      // (col D) and Date (col A). Uses historical (not spot) rates to match the ACB, Income,
+      // and Forex sheets.
       const amountCADFormulas = [];
-      
       for (let i = 0; i < rows.length; i++) {
-        // Using R1C1 notation: RC[x] means same row, column offset by x
-        amountCADFormulas.push([`=IF(RC[1]="CAD", RC[-1], IF(RC[1]="", RC[-1], RC[-1] * GOOGLEFINANCE("CURRENCY:" & RC[1] & "CAD")))`]);
+        const r = i + 2;
+        const fxBody = historicalCadFxFormula(`$D${r}`, `$A${r}`).substring(1); // drop leading '='
+        amountCADFormulas.push([`=$B${r}*${fxBody}`]);
       }
-      
-      // Set all formulas at once
-      sheet.getRange(2, 3, rows.length, 1).setFormulasR1C1(amountCADFormulas);
-      
-      // Format amount columns as currency
-      sheet.getRange(2, 2, rows.length, 1).setNumberFormat('$#,##0.00'); // Amount
-      sheet.getRange(2, 3, rows.length, 1).setNumberFormat('$#,##0.00'); // Amount (CAD)
+      sheet.getRange(2, 3, rows.length, 1).setFormulas(amountCADFormulas);
+
+      // Format date and amount/price columns
+      sheet.getRange(2, 1, rows.length, 1).setNumberFormat(CONFIG.SHEETS.DATE_FORMAT); // Date
+      sheet.getRange(2, 2, rows.length, 1).setNumberFormat('$#,##0.00');  // Amount
+      sheet.getRange(2, 3, rows.length, 1).setNumberFormat('$#,##0.00');  // Amount (CAD)
+      sheet.getRange(2, 10, rows.length, 1).setNumberFormat('$#,##0.00'); // Price
+      sheet.getRange(2, 11, rows.length, 1).setNumberFormat('$#,##0.00'); // Fee
     }
-    
+
     // Format header row
     formatSheetHeader(sheet);
+
+    // Auto-resize columns for better readability (excluding Transaction ID / Raw Data)
+    sheet.autoResizeColumns(1, 11);
     
-    // Auto-resize columns for better readability (excluding Raw Data column which can be very wide)
-    sheet.autoResizeColumns(1, 8);
-    
-    // Hide Transaction ID and Raw Data columns by default
-    sheet.hideColumns(9, 2);
-    
+    // Hide Attachment, Transaction ID, and Raw Data columns by default
+    sheet.hideColumns(12, 3);
+
     SpreadsheetApp.getUi().alert(`Refreshed ${rows.length} transactions.`);
   } catch (error) {
     SpreadsheetApp.getUi().alert(`Error refreshing transactions: ${error.message}`);
-    Logger.log(`refreshTransactions error: ${error.message}`);
+    debugLog('refreshTransactions', 'error', error.stack || error.message);
   }
 }
 
@@ -1516,7 +1723,11 @@ function onOpen(e) {
     .addSeparator()
     .addItem('📊 Refresh Accounts', 'refreshAccounts')
     .addItem('💰 Refresh Holdings', 'refreshHoldings')
+    .addItem('🎯 Refresh Options', 'refreshOptions')
     .addItem('📜 Refresh Transactions', 'showTransactionDialog')
+    .addItem('📐 Calculate ACB / Capital Gains', 'refreshACB')
+    .addItem('💵 Income & Dividends', 'refreshIncome')
+    .addItem('💱 Forex Gains (currency as property)', 'refreshForex')
     .addSeparator()
     .addItem('📈 Track Account History', 'trackAccountHistory')
     .addSeparator()
@@ -1526,7 +1737,9 @@ function onOpen(e) {
         .addItem('Configure API Keys', 'showApiKeyDialog')
         .addItem('Register User', 'showRegisterDialog')
         .addItem('Broker Capabilities', 'showBrokerStatusDialog')
-        .addItem('Toggle Debug Mode', 'toggleDebugMode')
+        .addItem('🐞 Toggle Debug Mode', 'toggleDebugMode')
+        .addItem('🐞 View Debug Log', 'showDebugLog')
+        .addItem('🐞 Clear Debug Log', 'clearDebugLog')
         .addItem('Help & Docs', 'showHelpDialog')
         .addItem('Clear All Data', 'clearAllData')
     )

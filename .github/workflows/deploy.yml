@@ -1,0 +1,50 @@
+name: Deploy to Apps Script
+
+# Pushes the .gs/.html/appsscript.json sources to the bound Apps Script project via clasp.
+# Requires two repository secrets; the job no-ops (does not fail) if they are absent:
+#   CLASPRC_JSON  - contents of your ~/.clasprc.json after `clasp login`
+#   SCRIPT_ID     - the Apps Script project ID (Extensions -> Apps Script -> Project Settings)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Check for clasp credentials
+        id: check
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+          SCRIPT_ID: ${{ secrets.SCRIPT_ID }}
+        run: |
+          if [ -n "$CLASPRC_JSON" ] && [ -n "$SCRIPT_ID" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping clasp push — set CLASPRC_JSON and SCRIPT_ID secrets to enable deployment."
+          fi
+
+      - name: Install clasp
+        if: steps.check.outputs.ready == 'true'
+        run: npm install -g @google/clasp
+
+      - name: Configure clasp
+        if: steps.check.outputs.ready == 'true'
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+          SCRIPT_ID: ${{ secrets.SCRIPT_ID }}
+        run: |
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          printf '{"scriptId":"%s","rootDir":"."}' "$SCRIPT_ID" > .clasp.json
+
+      - name: Push to Apps Script
+        if: steps.check.outputs.ready == 'true'
+        run: clasp push -f
