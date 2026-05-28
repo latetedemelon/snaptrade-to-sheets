@@ -27,6 +27,10 @@ Notes:
 
 ## Quick Start
 
+> First time installing? See the full **[Installation Guide](docs/INSTALL.md)** — it covers
+> getting the code into Apps Script (copy-paste or `clasp`) and authorizing the script. The
+> steps below are the in-sheet configuration once it's installed.
+
 ### 1. Configure API Keys
 
 1. Get your SnapTrade API credentials from [SnapTrade Dashboard](https://snaptrade.com)
@@ -93,6 +97,7 @@ off when done (it slows refreshes), and use
 
 ## Documentation
 
+- [docs/INSTALL.md](docs/INSTALL.md) — full installation & setup guide (start here)
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — source layout, data flow, and local
   development with `clasp`
 - [docs/ACB.md](docs/ACB.md) — Adjusted Cost Base & capital gains
