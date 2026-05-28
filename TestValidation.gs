@@ -394,6 +394,9 @@ function testFees() {
 
   Logger.log('[TEST] ✓ Fees test passed');
   return { records: records.length, tradeFees: tradeFees.length, accountFees: acctFees.length };
+}
+
+/**
  * Tests realized-trade leg classification and per-instrument grouping/ordering from a fixed
  * fixture. No credentials needed. Covers an equity buy/buy/sell and an option open→close→reopen
  * (roll) sequence, asserting that the rolled option's close emits a CLOSE leg. The running
@@ -646,6 +649,9 @@ function runAllValidationTests() {
     results.fees = testFees();
   } catch (error) {
     Logger.log(`Failed: testFees - ${error.message}`);
+  }
+
+  try {
     results.realizedTrades = testRealizedTrades();
   } catch (error) {
     Logger.log(`Failed: testRealizedTrades - ${error.message}`);
