@@ -74,6 +74,8 @@ Pick **one** method.
    npm install -g @google/clasp
    clasp login
    ```
+   (On a server / cloud VM with no browser, use `clasp login --no-localhost` — see
+   [headless login](#clasp-login-on-a-headless-or-remote-machine-no-browser) below.)
 2. Get the **Script ID** of your sheet's bound project: in the sheet, **Extensions → Apps
    Script → ⚙️ Project Settings → Script ID**. (If the sheet has no script yet, open
    **Extensions → Apps Script** once to create the bound project.)
@@ -89,6 +91,48 @@ Pick **one** method.
 
 > `clasp push` only uploads source (`.gs`, `.html`, `appsscript.json`); it never touches your
 > credentials, which live in Apps Script *properties*, not in the code.
+
+#### `clasp login` on a headless or remote machine (no browser)
+
+If you're installing from a server, container, or cloud VM (e.g. a GCloud instance over SSH),
+`clasp login` can't open a browser for the Google OAuth flow. Use the no-localhost flow and
+make sure the API is enabled:
+
+1. **Enable the Apps Script API** for the Google account you'll log in as:
+   <https://script.google.com/home/usersettings> → turn **Google Apps Script API** **on**.
+   (Without this, login may appear to work but `push`/`pull` fail with 403.)
+2. Log in with the flag that prints a URL instead of opening a browser:
+   ```bash
+   clasp login --no-localhost
+   ```
+   Open the printed URL **in a browser on your own computer**, approve access, then paste the
+   resulting code back into the terminal.
+
+**Troubleshooting `clasp login`:**
+
+- **`Unexpected end of JSON input`** — clasp is reading an empty or corrupted **global**
+  credentials file. Note that clasp keeps login credentials in `~/.clasprc.json` (your home
+  directory), which is *different* from the per-project `./.clasp.json` (which only holds the
+  `scriptId`). Delete the global file and log in again:
+  ```bash
+  rm -f ~/.clasprc.json        # Windows: del %USERPROFILE%\.clasprc.json
+  clasp login --no-localhost
+  ```
+  If it persists, find and remove any zero-byte clasp config:
+  ```bash
+  find ~ . -maxdepth 3 \( -name '.clasprc.json' -o -name '.clasp.json' \) -size 0 2>/dev/null
+  ```
+- **`invalid_grant` / "you're logged in but `push` fails"** — same fix: remove
+  `~/.clasprc.json` and re-run `clasp login`.
+- **Access blocked / `invalid_request` in the browser** — the Apps Script API (step 1) isn't
+  enabled for that account, or you approved with a different account than the one that owns the
+  sheet. Re-check step 1 and log in with the sheet's owner account.
+
+> Pushing a **container-bound** Sheets script from a headless box is the most finicky path. If
+> the OAuth flow keeps fighting you, **[Method A](#method-a--copy-into-the-apps-script-editor-recommended-no-tools)**
+> (copy-paste into the Apps Script editor) needs no `clasp`, no login, and no API toggle — it's
+> the faster way to just get the tool running.
+
 
 ## 5. Authorize the script
 
