@@ -296,6 +296,7 @@ function testIncomeTracker() {
  */
 function testOptionsExtraction() {
   const assert = (cond, msg) => { if (!cond) throw new Error(`Assertion failed: ${msg}`); };
+  const approx = (a, b) => Math.abs(a - b) < 1e-6;
 
   Logger.log('[TEST] Starting options extraction test');
 
@@ -313,6 +314,16 @@ function testOptionsExtraction() {
   const b = extractOptionInfo({ option_symbol: { ticker: 'TSLA 251219P00200000', option_type: 'put', strike_price: 200 } });
   assert(b.type === 'PUT', 'type normalized to PUT');
   assert(b.underlying === 'TSLA', 'underlying inferred from ticker');
+
+  // Value math (real short-put case): price is per share (×100), but average_purchase_price is
+  // already per contract, so it must NOT be multiplied again. -3 puts, now $1.82, sold at $2.23.
+  const v = computeOptionValues({
+    option_symbol: { ticker: 'SOFI 260821P00016000', option_type: 'PUT', strike_price: 16 },
+    units: -3, price: 1.82, average_purchase_price: 223, multiplier: 100, currency: { code: 'USD' },
+  });
+  assert(approx(v.marketValue, -546), `market value -546 (got ${v.marketValue})`);   // -3 × 1.82 × 100
+  assert(approx(v.costBasis, -669), `cost basis -669 not -66900 (got ${v.costBasis})`); // -3 × 223 (no ×100)
+  assert(approx(v.gainLoss, 123), `gain/loss +123 (got ${v.gainLoss})`);              // -546 − (−669)
 
   Logger.log('[TEST] ✓ Options extraction test passed');
   return { ok: true };
