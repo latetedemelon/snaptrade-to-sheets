@@ -49,7 +49,7 @@ try {
     console,
   };
   let src = '';
-  ['Code.gs', 'ACB.gs', 'Income.gs', 'Options.gs', 'Forex.gs', 'Pnl.gs', 'Realized.gs', 'Fees.gs', 'Rolls.gs', 'TestValidation.gs'].forEach((f) => {
+  ['Code.gs', 'ACB.gs', 'Income.gs', 'Options.gs', 'Forex.gs', 'Pnl.gs', 'Realized.gs', 'Fees.gs', 'Rolls.gs', 'Wheel.gs', 'TestValidation.gs'].forEach((f) => {
     src += fs.readFileSync(path.join(ROOT, f), 'utf8') + '\n';
   });
   src += '\nthis.__acbResult = testAcbCalculations();\n';
@@ -62,6 +62,7 @@ try {
   src += 'this.__pnlResult = testUnrealizedPnl();\n';
   src += 'this.__realizedResult = testRealizedTrades();\n';
   src += 'this.__rollsResult = testRollChains();\n';
+  src += 'this.__wheelResult = testWheel();\n';
   vm.runInNewContext(src, sandbox, { filename: 'logic-test-bundle.js' });
 
   const r = sandbox.__acbResult;
@@ -109,6 +110,11 @@ try {
   if (rolls.sofiNet !== 769) throw new Error(`Roll chains: expected SOFI net 769, got ${rolls.sofiNet}`);
   if (rolls.sofiRolls !== 1) throw new Error(`Roll chains: expected SOFI 1 roll, got ${rolls.sofiRolls}`);
   pass('Roll chains logic test (testRollChains)');
+
+  const wheel = sandbox.__wheelResult;
+  if (!wheel || wheel.rows !== 2) throw new Error(`Wheel: expected 2 underlyings, got ${wheel && wheel.rows}`);
+  if (wheel.sofiBreakEven !== 12.2) throw new Error(`Wheel: expected SOFI break-even 12.2, got ${wheel.sofiBreakEven}`);
+  pass('Wheel logic test (testWheel)');
 } catch (e) {
   fail(`logic test — ${e.message}`);
 }

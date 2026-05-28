@@ -82,6 +82,9 @@ function buildRollChains(activities) {
       action: action,
       units: units,
       amount: amount,
+      strike: Number(info.strike) || 0,
+      optType: info.type, // 'PUT' | 'CALL' | ''
+      multiplier: Number(tx.multiplier) || Number(info.multiplier) || 100,
       currency: (tx.currency && tx.currency.code) || 'USD',
     });
   });
@@ -107,13 +110,22 @@ function buildRollChains(activities) {
       if (!chain) {
         chainNum += 1;
         chain = { underlying: underlying, chainNum: chainNum, opens: 0, netCredit: 0,
-          currency: leg.currency, firstDate: leg.date, lastDate: leg.date };
+          currency: leg.currency, firstDate: leg.date, lastDate: leg.date,
+          contractSize: 0, lastStrike: 0, optType: '', multiplier: leg.multiplier };
         exposure = 0;
       }
       chain.netCredit += leg.amount;
       chain.lastDate = leg.date;
-      if (leg.action === 'OPEN') { exposure += leg.units; chain.opens += 1; }
-      else { exposure = Math.max(0, exposure - leg.units); }
+      chain.lastStrike = leg.strike;     // break-even uses the most recent (rolled-to) strike
+      chain.optType = leg.optType;
+      chain.multiplier = leg.multiplier;
+      if (leg.action === 'OPEN') {
+        exposure += leg.units;
+        chain.opens += 1;
+        if (chain.contractSize === 0) chain.contractSize = leg.units; // contracts per leg
+      } else {
+        exposure = Math.max(0, exposure - leg.units);
+      }
 
       const next = list[i + 1];
       const flatAndDone = exposure <= 1e-9 && (!next || next.date.getTime() > leg.date.getTime());
@@ -129,6 +141,13 @@ function buildRollChains(activities) {
 /**
  * Finalizes a chain's derived fields. @returns {Object} */
 function finalizeRollChain_(chain, exposure) {
+  const shares = chain.contractSize * chain.multiplier; // shares the position controls
+  const netCreditPerShare = shares > 0 ? chain.netCredit / shares : 0;
+  // "Break-even if assigned" only makes sense for short puts (you'd be put the shares at the
+  // latest strike, minus all the premium collected). Blank for calls / no strike.
+  const breakEven = (chain.optType === 'PUT' && chain.lastStrike > 0)
+    ? chain.lastStrike - netCreditPerShare
+    : '';
   return {
     underlying: chain.underlying,
     chainNum: chain.chainNum,
@@ -140,6 +159,10 @@ function finalizeRollChain_(chain, exposure) {
     currency: chain.currency,
     openContracts: Math.round(exposure * 10000) / 10000,
     opens: chain.opens,
+    optType: chain.optType,
+    lastStrike: chain.lastStrike,
+    netCreditPerShare: Math.round(netCreditPerShare * 10000) / 10000,
+    breakEven: breakEven === '' ? '' : Math.round(breakEven * 10000) / 10000,
   };
 }
 
@@ -153,8 +176,9 @@ function writeRollChainsSheet(chains) {
   sheet.clear();
 
   const headers = [
-    'Underlying', 'Chain #', 'Status', 'Rolls', 'Open Contracts', 'First Date', 'Last Date',
-    'Net Credit', 'Currency', 'Net Credit (CAD, approx)',
+    'Underlying', 'Chain #', 'Status', 'Type', 'Rolls', 'Open Contracts', 'First Date',
+    'Last Date', 'Net Credit', 'Net Credit / Share', 'Latest Strike', 'Break-even if Assigned',
+    'Currency', 'Net Credit (CAD, approx)',
   ];
   sheet.appendRow(headers);
 
@@ -164,29 +188,32 @@ function writeRollChainsSheet(chains) {
   });
 
   const data = sorted.map((c) => [
-    c.underlying, c.chainNum, c.status, c.rolls, c.openContracts,
-    c.firstDate, c.lastDate, c.netCredit, c.currency, '', // CAD (formula)
+    c.underlying, c.chainNum, c.status, c.optType, c.rolls, c.openContracts, c.firstDate,
+    c.lastDate, c.netCredit, c.netCreditPerShare, c.lastStrike || '', c.breakEven, c.currency,
+    '', // Net Credit (CAD) — formula
   ]);
 
   if (data.length > 0) {
     sheet.getRange(2, 1, data.length, headers.length).setValues(data);
-    // Net Credit (CAD) at col 10 <- Currency(9) and Net Credit(8). Current (spot) rate, since a
+    // Net Credit (CAD) at col 14 <- Currency(13) and Net Credit(9). Current (spot) rate, since a
     // chain spans many dates; labelled approximate.
-    const cadFormula = getCADConversionFormula(-1, -2);
+    const cadFormula = getCADConversionFormula(-1, -5);
     const cad = [];
     for (let i = 0; i < data.length; i++) cad.push([cadFormula]);
-    sheet.getRange(2, 10, data.length, 1).setFormulasR1C1(cad);
+    sheet.getRange(2, 14, data.length, 1).setFormulasR1C1(cad);
 
-    sheet.getRange(2, 6, data.length, 2).setNumberFormat(CONFIG.SHEETS.DATE_FORMAT); // dates
-    sheet.getRange(2, 8, data.length, 1).setNumberFormat(CONFIG.SHEETS.CURRENCY_FORMAT); // net credit
-    sheet.getRange(2, 10, data.length, 1).setNumberFormat(CONFIG.SHEETS.CURRENCY_FORMAT); // CAD
+    sheet.getRange(2, 7, data.length, 2).setNumberFormat(CONFIG.SHEETS.DATE_FORMAT); // dates (7,8)
+    [9, 10, 11, 12, 14].forEach((col) => {
+      sheet.getRange(2, col, data.length, 1).setNumberFormat(CONFIG.SHEETS.CURRENCY_FORMAT);
+    });
   }
 
   formatSheetHeader(sheet);
   sheet.setFrozenRows(1);
-  sheet.getRange(1, 8).setNote(
+  sheet.getRange(1, 9).setNote(
     'Net Credit = sum of all option cash flows in the chain (premiums received positive, debits ' +
-    'paid negative). A chain is kept alive across rolls and ends when the position goes flat. ' +
-    'This is a trade-management view, not the per-contract ACB used for tax (see Realized Trades).'
+    'paid negative), i.e. your initial sell plus every roll credit. A chain is kept alive across ' +
+    'rolls and ends when the position goes flat. Break-even if Assigned (short puts) = latest ' +
+    'strike − net credit per share. Trade-management view, not the per-contract ACB used for tax.'
   );
 }
