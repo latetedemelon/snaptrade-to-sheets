@@ -7,6 +7,10 @@ etc.) into a single history.
 ## Unreleased
 
 ### Added
+- **Summary dashboard** (`Summary.gs`): a "Summary" sheet pulling the other sheets together with
+  live formulas — headline totals, YTD income / realized gains / FX / fees, a net-worth line
+  chart from Account History, allocation pie charts by account and currency, and a top-holdings
+  table. No extra API calls; degrades gracefully when a source sheet isn't generated yet.
 - **Option roll chains** (`Rolls.gs`): a "Roll Chains" sheet that groups an underlying's
   option activity into campaigns kept alive across rolls, reporting net credit/debit, roll
   count, open contracts, and open/closed status. A trade-management view (not per-contract ACB).

@@ -1721,6 +1721,7 @@ function onOpen(e) {
     .addItem('🔗 Connect Brokerage', 'showConnectBrokerageDialog')
     .addItem('📋 View Connected Accounts', 'showAccountsSidebar')
     .addSeparator()
+    .addItem('🧭 Summary Dashboard', 'refreshSummary')
     .addItem('📊 Refresh Accounts', 'refreshAccounts')
     .addItem('💰 Refresh Holdings', 'refreshHoldings')
     .addItem('🎯 Refresh Options', 'refreshOptions')
