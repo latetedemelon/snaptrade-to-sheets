@@ -7,6 +7,16 @@ etc.) into a single history.
 ## Unreleased
 
 ### Added
+- **Option roll chains** (`Rolls.gs`): a "Roll Chains" sheet that groups an underlying's
+  option activity into campaigns kept alive across rolls, reporting net credit/debit, roll
+  count, open contracts, and open/closed status. A trade-management view (not per-contract ACB).
+
+### Fixed
+- `classifyRealizedLeg` now classifies `SELL_TO_OPEN` / `BUY_TO_CLOSE` by the explicit
+  open/close token first, so short option positions (opened with a sell, closed with a buy)
+  are no longer reversed — affects Realized Trades and Roll Chains.
+
+### Added (earlier)
 - **ACB / capital-gains calculator** (`ACB.gs`): builds an **ACB Ledger** and a
   **Capital Gains** summary from the full activity history. Cost base is tracked in CAD
   using historical (trade-date) `GOOGLEFINANCE` rates. Handles buys, sells, commissions,

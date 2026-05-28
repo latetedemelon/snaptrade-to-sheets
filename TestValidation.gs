@@ -413,6 +413,8 @@ function testRealizedTrades() {
   assert(classifyRealizedLeg({ type: 'SELL' }) === 'CLOSE', 'SELL -> CLOSE');
   assert(classifyRealizedLeg({ type: 'BUY_TO_OPEN' }) === 'OPEN', 'BUY_TO_OPEN -> OPEN');
   assert(classifyRealizedLeg({ type: 'SELL_TO_CLOSE' }) === 'CLOSE', 'SELL_TO_CLOSE -> CLOSE');
+  assert(classifyRealizedLeg({ type: 'SELL_TO_OPEN' }) === 'OPEN', 'SELL_TO_OPEN -> OPEN (short open)');
+  assert(classifyRealizedLeg({ type: 'BUY_TO_CLOSE' }) === 'CLOSE', 'BUY_TO_CLOSE -> CLOSE (short close)');
   assert(classifyRealizedLeg({ type: 'OPTIONEXPIRATION' }) === 'CLOSE', 'expiry -> CLOSE');
   assert(classifyRealizedLeg({ type: 'OPTIONASSIGNMENT' }) === 'CLOSE', 'assignment -> CLOSE');
   assert(classifyRealizedLeg({ type: 'TRADE', units: 5 }) === 'OPEN', 'positive units -> OPEN');
@@ -491,6 +493,50 @@ function testRealizedTrades() {
     optionCloses: optionLegs.filter((l) => l.action === 'CLOSE').length,
     optionContracts: optionSymbols.length,
   };
+}
+
+/**
+ * Tests roll-chain grouping and net-credit math. No credentials needed. A SOFI short-put
+ * campaign that is opened, rolled once (same-day close+reopen), then closed should collapse to
+ * ONE closed chain; a separate still-open AAPL put should be its own open chain.
+ */
+function testRollChains() {
+  const assert = (cond, msg) => { if (!cond) throw new Error(`Assertion failed: ${msg}`); };
+  const approx = (a, b) => Math.abs(a - b) < 1e-6;
+
+  Logger.log('[TEST] Starting roll chains test');
+
+  const opt = (ticker) => ({ ticker: ticker, option_type: 'PUT', strike_price: 16, underlying_symbol: { symbol: ticker.split(' ')[0] } });
+  const activities = [
+    // SOFI short-put campaign: open (credit), roll same day (debit to close + credit to reopen), close.
+    { type: 'SELL_TO_OPEN', option_symbol: opt('SOFI 260821P00016000'), units: 3, amount: 669, trade_date: '2023-06-01', currency: { code: 'USD' } },
+    { type: 'BUY_TO_CLOSE', option_symbol: opt('SOFI 260821P00016000'), units: 3, amount: -500, trade_date: '2023-07-01', currency: { code: 'USD' } },
+    { type: 'SELL_TO_OPEN', option_symbol: opt('SOFI 261218P00015000'), units: 3, amount: 700, trade_date: '2023-07-01', currency: { code: 'USD' } },
+    { type: 'BUY_TO_CLOSE', option_symbol: opt('SOFI 261218P00015000'), units: 3, amount: -100, trade_date: '2023-08-01', currency: { code: 'USD' } },
+    // Separate AAPL position still open (one leg).
+    { type: 'SELL_TO_OPEN', option_symbol: opt('AAPL 260116P00150000'), units: 1, amount: 200, trade_date: '2023-09-01', currency: { code: 'USD' } },
+    // Non-option activity ignored.
+    { type: 'DIVIDEND', symbol: { symbol: 'SOFI' }, amount: 10, trade_date: '2023-06-15', currency: { code: 'USD' } },
+  ];
+
+  const chains = buildRollChains(activities);
+  assert(chains.length === 2, `2 chains (got ${chains.length})`);
+
+  const sofi = chains.find((c) => c.underlying === 'SOFI');
+  assert(!!sofi, 'SOFI chain exists');
+  assert(sofi.status === 'Closed', `SOFI closed (got ${sofi.status})`);
+  assert(sofi.rolls === 1, `SOFI rolled once (got ${sofi.rolls})`);          // 2 opens -> 1 roll
+  assert(approx(sofi.netCredit, 769), `SOFI net credit 769 (got ${sofi.netCredit})`); // 669-500+700-100
+  assert(approx(sofi.openContracts, 0), `SOFI flat (got ${sofi.openContracts})`);
+
+  const aapl = chains.find((c) => c.underlying === 'AAPL');
+  assert(!!aapl, 'AAPL chain exists');
+  assert(aapl.status === 'Open', `AAPL open (got ${aapl.status})`);
+  assert(approx(aapl.netCredit, 200), `AAPL net credit 200 (got ${aapl.netCredit})`);
+  assert(aapl.rolls === 0, `AAPL no rolls (got ${aapl.rolls})`);
+
+  Logger.log('[TEST] ✓ Roll chains test passed');
+  return { chains: chains.length, sofiNet: sofi.netCredit, sofiRolls: sofi.rolls };
 }
 
 /**
@@ -655,6 +701,12 @@ function runAllValidationTests() {
     results.realizedTrades = testRealizedTrades();
   } catch (error) {
     Logger.log(`Failed: testRealizedTrades - ${error.message}`);
+  }
+
+  try {
+    results.rollChains = testRollChains();
+  } catch (error) {
+    Logger.log(`Failed: testRollChains - ${error.message}`);
   }
 
   try {

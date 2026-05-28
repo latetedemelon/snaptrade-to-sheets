@@ -49,7 +49,7 @@ try {
     console,
   };
   let src = '';
-  ['Code.gs', 'ACB.gs', 'Income.gs', 'Options.gs', 'Forex.gs', 'Pnl.gs', 'Realized.gs', 'Fees.gs', 'TestValidation.gs'].forEach((f) => {
+  ['Code.gs', 'ACB.gs', 'Income.gs', 'Options.gs', 'Forex.gs', 'Pnl.gs', 'Realized.gs', 'Fees.gs', 'Rolls.gs', 'TestValidation.gs'].forEach((f) => {
     src += fs.readFileSync(path.join(ROOT, f), 'utf8') + '\n';
   });
   src += '\nthis.__acbResult = testAcbCalculations();\n';
@@ -61,6 +61,7 @@ try {
   src += 'this.__feesResult = testFees();\n';
   src += 'this.__pnlResult = testUnrealizedPnl();\n';
   src += 'this.__realizedResult = testRealizedTrades();\n';
+  src += 'this.__rollsResult = testRollChains();\n';
   vm.runInNewContext(src, sandbox, { filename: 'logic-test-bundle.js' });
 
   const r = sandbox.__acbResult;
@@ -102,6 +103,12 @@ try {
   if (realized.optionCloses !== 1) throw new Error(`Realized: expected 1 option close (roll), got ${realized.optionCloses}`);
   if (realized.optionContracts !== 2) throw new Error(`Realized: expected 2 option contracts, got ${realized.optionContracts}`);
   pass('Realized trades logic test (testRealizedTrades)');
+
+  const rolls = sandbox.__rollsResult;
+  if (!rolls || rolls.chains !== 2) throw new Error(`Roll chains: expected 2 chains, got ${rolls && rolls.chains}`);
+  if (rolls.sofiNet !== 769) throw new Error(`Roll chains: expected SOFI net 769, got ${rolls.sofiNet}`);
+  if (rolls.sofiRolls !== 1) throw new Error(`Roll chains: expected SOFI 1 roll, got ${rolls.sofiRolls}`);
+  pass('Roll chains logic test (testRollChains)');
 } catch (e) {
   fail(`logic test — ${e.message}`);
 }
