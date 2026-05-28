@@ -49,6 +49,7 @@ try {
     console,
   };
   let src = '';
+  ['Code.gs', 'ACB.gs', 'Income.gs', 'Options.gs', 'Forex.gs', 'Fees.gs', 'TestValidation.gs'].forEach((f) => {
   ['Code.gs', 'ACB.gs', 'Income.gs', 'Options.gs', 'Forex.gs', 'Pnl.gs', 'TestValidation.gs'].forEach((f) => {
   ['Code.gs', 'ACB.gs', 'Income.gs', 'Options.gs', 'Forex.gs', 'Realized.gs', 'TestValidation.gs'].forEach((f) => {
     src += fs.readFileSync(path.join(ROOT, f), 'utf8') + '\n';
@@ -59,6 +60,7 @@ try {
   src += 'this.__forexResult = testForexCalculations();\n';
   src += 'this.__debugResult = testDebugLogHelper();\n';
   src += 'this.__reconResult = testReconciliationGuards();\n';
+  src += 'this.__feesResult = testFees();\n';
   src += 'this.__pnlResult = testUnrealizedPnl();\n';
   src += 'this.__realizedResult = testRealizedTrades();\n';
   vm.runInNewContext(src, sandbox, { filename: 'logic-test-bundle.js' });
@@ -86,6 +88,11 @@ try {
   if (!sandbox.__reconResult || !sandbox.__reconResult.ok) throw new Error('Reconciliation guard test did not pass');
   pass('Reconciliation logic test (testReconciliationGuards)');
 
+  const fees = sandbox.__feesResult;
+  if (!fees || fees.records !== 3) throw new Error(`Fees: expected 3 records, got ${fees && fees.records}`);
+  if (fees.tradeFees !== 2) throw new Error(`Fees: expected 2 trade fees, got ${fees.tradeFees}`);
+  if (fees.accountFees !== 1) throw new Error(`Fees: expected 1 account fee, got ${fees.accountFees}`);
+  pass('Fees logic test (testFees)');
   const pnl = sandbox.__pnlResult;
   if (!pnl || pnl.symbols !== 2) throw new Error(`P/L: expected 2 pooled symbols, got ${pnl && pnl.symbols}`);
   if (pnl.aaplUnits !== 150) throw new Error(`P/L: expected AAPL 150 units, got ${pnl.aaplUnits}`);

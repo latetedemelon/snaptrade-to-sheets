@@ -351,6 +351,49 @@ function testForexCalculations() {
 }
 
 /**
+ * Tests fee classification and record-building from a fixed fixture. No credentials needed.
+ * Verifies the two fee sources (per-trade tx.fee vs standalone fee activities), correct
+ * source classification, that zero/absent fees are skipped, and that a standalone fee
+ * activity is not double-counted (one record, not a Trade Fee plus an Account Fee).
+ */
+function testFees() {
+  const assert = (cond, msg) => { if (!cond) throw new Error(`Assertion failed: ${msg}`); };
+  const approx = (a, b) => Math.abs(a - b) < 1e-6;
+
+  Logger.log('[TEST] Starting fees test');
+
+  assert(isStandaloneFeeActivity({ type: 'FEE' }) === true, 'FEE is a standalone fee');
+  assert(isStandaloneFeeActivity({ type: 'WITHDRAWALFEE' }) === true, 'WITHDRAWALFEE is a standalone fee');
+  assert(isStandaloneFeeActivity({ type: 'COMMISSION' }) === true, 'COMMISSION is a standalone fee');
+  assert(isStandaloneFeeActivity({ type: 'BUY' }) === false, 'BUY is not a standalone fee');
+
+  const sym = (s) => ({ symbol: s, description: s, currency: { code: 'USD' } });
+  const activities = [
+    // BUY carrying a per-trade fee (Trade Fee) — amount is the trade cost, not a fee.
+    { type: 'BUY', symbol: sym('AAPL'), units: 10, price: 100, fee: 4.95, amount: -1000, trade_date: '2023-01-10', currency: { code: 'USD' }, account: { name: 'RRSP' } },
+    // SELL carrying a per-trade fee (Trade Fee).
+    { type: 'SELL', symbol: sym('AAPL'), units: 5, price: 120, fee: 4.95, amount: 600, trade_date: '2023-02-01', currency: { code: 'USD' }, account: { name: 'RRSP' } },
+    // Standalone account fee — fee is its amount; its own fee field must not double-count.
+    { type: 'FEE', amount: 9.99, fee: 9.99, trade_date: '2023-03-01', currency: { code: 'CAD' }, account: { name: 'RRSP' } },
+    // No-fee activity (zero fee) — skipped.
+    { type: 'BUY', symbol: sym('VTI'), units: 1, price: 50, fee: 0, amount: -50, trade_date: '2023-04-01', currency: { code: 'USD' }, account: { name: 'TFSA' } },
+  ];
+
+  const records = buildFeeRecords(activities);
+  assert(records.length === 3, `3 fee records (got ${records.length})`);
+
+  const tradeFees = records.filter((r) => r.source === 'Trade Fee');
+  const acctFees = records.filter((r) => r.source === 'Account Fee');
+  assert(tradeFees.length === 2, `2 trade fees (got ${tradeFees.length})`);
+  assert(acctFees.length === 1, `1 account fee (got ${acctFees.length})`);
+
+  // No double counting: the standalone FEE activity yields a single Account Fee of 9.99,
+  // not a Trade Fee plus an Account Fee.
+  assert(approx(acctFees[0].feeNative, 9.99), `account fee native 9.99 (got ${acctFees[0].feeNative})`);
+  assert(approx(tradeFees[0].feeNative, 4.95) && approx(tradeFees[1].feeNative, 4.95), 'trade fees are 4.95 each');
+
+  Logger.log('[TEST] ✓ Fees test passed');
+  return { records: records.length, tradeFees: tradeFees.length, accountFees: acctFees.length };
  * Tests realized-trade leg classification and per-instrument grouping/ordering from a fixed
  * fixture. No credentials needed. Covers an equity buy/buy/sell and an option open→close→reopen
  * (roll) sequence, asserting that the rolled option's close emits a CLOSE leg. The running
@@ -600,6 +643,9 @@ function runAllValidationTests() {
   }
 
   try {
+    results.fees = testFees();
+  } catch (error) {
+    Logger.log(`Failed: testFees - ${error.message}`);
     results.realizedTrades = testRealizedTrades();
   } catch (error) {
     Logger.log(`Failed: testRealizedTrades - ${error.message}`);
