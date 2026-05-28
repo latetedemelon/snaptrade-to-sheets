@@ -83,8 +83,12 @@ function classifyRealizedLeg(tx) {
 
   const matches = (keywords) => keywords.some((kw) => type.indexOf(kw) !== -1);
 
-  // Close keywords are checked first so SELL_TO_CLOSE is not swallowed by the BUY rule, and
-  // expiry/assignment of a held option counts as a disposition.
+  // Explicit open/close tokens win first, so SELL_TO_OPEN (opening a short) and BUY_TO_CLOSE
+  // (closing a short) are classified by intent rather than by the BUY/SELL side — a short is
+  // opened with a sell and closed with a buy, which the bare BUY/SELL rules get backwards.
+  if (type.indexOf('OPEN') !== -1) return 'OPEN';
+  if (type.indexOf('CLOSE') !== -1) return 'CLOSE';
+  // Then expiry/assignment (a held option disposed) and the plain BUY/SELL convention.
   if (matches(REALIZED_CLOSE_KEYWORDS)) return 'CLOSE';
   if (matches(REALIZED_OPEN_KEYWORDS)) return 'OPEN';
   // Ambiguous type: lean on the units sign.

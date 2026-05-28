@@ -1731,6 +1731,7 @@ function onOpen(e) {
     .addItem('💱 Forex Gains (currency as property)', 'refreshForex')
     .addItem('🧾 Fees', 'refreshFees')
     .addItem('🔁 Realized Trades', 'refreshRealizedTrades')
+    .addItem('♻️ Roll Chains', 'refreshRollChains')
     .addSeparator()
     .addItem('📈 Track Account History', 'trackAccountHistory')
     .addSeparator()
