@@ -27,13 +27,7 @@ function refreshOptions() {
 
       optionPositions.forEach((pos) => {
         const info = extractOptionInfo(pos);
-        const contracts = Number(pos.units) || 0;
-        const price = Number(pos.price) || 0;
-        const avg = Number(pos.average_purchase_price) || 0;
-        const multiplier = Number(pos.multiplier) || info.multiplier || DEFAULT_OPTION_MULTIPLIER;
-        const currency = (pos.currency && pos.currency.code) || 'USD';
-        const marketValue = contracts * price * multiplier;
-        const costBasis = contracts * avg * multiplier;
+        const vals = computeOptionValues(pos, info);
 
         rows.push([
           account.name || account.number,
@@ -42,13 +36,13 @@ function refreshOptions() {
           info.type,
           info.strike,
           info.expiry,
-          contracts,
-          price,
-          multiplier,
-          currency,
-          marketValue,
-          costBasis,
-          marketValue - costBasis,
+          vals.contracts,
+          vals.price,
+          vals.multiplier,
+          (pos.currency && pos.currency.code) || 'USD',
+          vals.marketValue,
+          vals.costBasis,
+          vals.gainLoss,
           '', '', '', // CAD columns (formulas)
         ]);
       });
@@ -123,4 +117,29 @@ function extractOptionInfo(pos) {
   }
 
   return { ticker, type, strike, expiry, underlying, multiplier: opt.multiplier };
+}
+
+/**
+ * Computes contracts, market value, cost basis, and gain/loss for one option position.
+ *
+ * SnapTrade is asymmetric for options: `price` (the current quote) is **per share**, so it is
+ * multiplied by the contract multiplier (×100) to get a dollar market value — but
+ * `average_purchase_price` is already **per contract** (it includes the multiplier), so it is
+ * NOT multiplied again. Applying the multiplier to cost basis double-counts it and inflates the
+ * figure ~100×. Sign follows `units` (negative for short positions).
+ *
+ * @param {Object} pos - An option position from holdings.option_positions
+ * @param {Object} [info] - Optional pre-extracted extractOptionInfo(pos)
+ * @returns {{contracts: number, price: number, multiplier: number, marketValue: number,
+ *   costBasis: number, gainLoss: number}}
+ */
+function computeOptionValues(pos, info) {
+  const opt = info || extractOptionInfo(pos);
+  const contracts = Number(pos.units) || 0;
+  const price = Number(pos.price) || 0;                       // per share
+  const avg = Number(pos.average_purchase_price) || 0;        // per contract (already ×100)
+  const multiplier = Number(pos.multiplier) || opt.multiplier || DEFAULT_OPTION_MULTIPLIER;
+  const marketValue = contracts * price * multiplier;
+  const costBasis = contracts * avg;
+  return { contracts, price, multiplier, marketValue, costBasis, gainLoss: marketValue - costBasis };
 }
