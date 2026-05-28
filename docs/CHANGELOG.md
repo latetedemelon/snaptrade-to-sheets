@@ -12,6 +12,12 @@ etc.) into a single history.
   count, open contracts, and open/closed status. A trade-management view (not per-contract ACB).
 
 ### Fixed
+- Realized Trades now tracks **signed** positions: a sell-to-open shows as short (−) and a
+  buy-to-close covers it, with running units that reconcile against holdings. Running cost
+  basis and realized P/L are short-aware (premium − buyback for shorts), validated by a pure
+  `computeRealizedRows` model test for both long and short round trips.
+- Option **cost basis** on the Options sheet no longer double-applies the contract multiplier
+  (SnapTrade's `average_purchase_price` is already per contract) — was ~100× too large.
 - `classifyRealizedLeg` now classifies `SELL_TO_OPEN` / `BUY_TO_CLOSE` by the explicit
   open/close token first, so short option positions (opened with a sell, closed with a buy)
   are no longer reversed — affects Realized Trades and Roll Chains.

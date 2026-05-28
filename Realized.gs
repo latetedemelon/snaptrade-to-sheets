@@ -156,12 +156,24 @@ function buildRealizedLegs(activities) {
       || (tx.symbol && tx.symbol.currency && tx.symbol.currency.code)
       || 'USD';
 
+    // Position sign follows the BUY/SELL side, not open/close: a buy adds contracts (+), a sell
+    // removes them (−). This is what makes a sell-to-open a short (−) and a buy-to-close a cover
+    // (+). Fall back to the raw units sign, then to the action for typeless expiry/assignment.
+    let side;
+    if (typeStr.indexOf('BUY') !== -1) side = 1;
+    else if (typeStr.indexOf('SELL') !== -1) side = -1;
+    else {
+      const rawUnits = Number(tx.units) || 0;
+      side = rawUnits > 0 ? 1 : (rawUnits < 0 ? -1 : (action === 'OPEN' ? 1 : -1));
+    }
+
     legs.push({
       date: date,
       instrumentType: instrumentType,
       symbol: symbol,
       multiplier: multiplier,
       action: action,
+      side: side,
       units: units,
       proceeds: proceeds,
       currency: currency,
@@ -185,6 +197,42 @@ function sortRealizedLegs(legs) {
     if (a.date.getTime() !== b.date.getTime()) return a.date.getTime() - b.date.getTime();
     return rank[a.action] - rank[b.action];
   });
+}
+
+/**
+ * Pure native-currency (FX=1) simulation of the signed running-cost / realized-P/L model the
+ * ledger encodes in cell formulas. Used to unit-test the math (the spreadsheet formulas can't
+ * run under Node). Handles long and short round trips symmetrically.
+ * @param {Array<Object>} legs - Output of buildRealizedLegs (must include .side)
+ * @returns {Array<{symbol: string, deltaUnits: number, runningUnits: number, realized: ?number}>}
+ */
+function computeRealizedRows(legs) {
+  const rows = [];
+  let prevSymbol = null;
+  let units = 0;   // signed running contracts
+  let basis = 0;   // signed running cost basis (native)
+  legs.forEach((leg) => {
+    if (leg.symbol !== prevSymbol) { units = 0; basis = 0; }
+    const G = leg.multiplier;
+    const F = leg.units;
+    const delta = leg.side * F;
+    const prevUnits = units;
+    const prevBasis = basis;
+    const prevPerUnit = prevUnits === 0 ? 0 : prevBasis / (prevUnits * G);
+    const value = F * leg.proceeds * G; // gross trade value (FX=1)
+    const opening = prevUnits === 0 || Math.sign(delta) === Math.sign(prevUnits);
+    let realized = null;
+    if (opening) {
+      basis = prevBasis + Math.sign(delta) * value;
+    } else {
+      realized = Math.sign(prevUnits) * (value - prevPerUnit * F * G);
+      basis = prevBasis + prevPerUnit * delta * G;
+    }
+    units = prevUnits + delta;
+    rows.push({ symbol: leg.symbol, deltaUnits: delta, runningUnits: units, realized: realized });
+    prevSymbol = leg.symbol;
+  });
+  return rows;
 }
 
 /**
@@ -216,29 +264,31 @@ function writeRealizedLedger(legs) {
   legs.forEach((leg, i) => {
     const r = i + 2; // sheet row (data starts at row 2)
     const firstOfGroup = leg.symbol !== prevSymbol;
-    const prevUnits = firstOfGroup ? '0' : `$M${r - 1}`;
-    const prevACB = firstOfGroup ? '0' : `$N${r - 1}`;
-    const prevACBUnit = firstOfGroup ? '0' : `$O${r - 1}`;
+    const prevUnits = firstOfGroup ? '0' : `$M${r - 1}`;   // signed running contracts
+    const prevACB = firstOfGroup ? '0' : `$N${r - 1}`;     // signed running cost basis (CAD)
+    const prevACBUnit = firstOfGroup ? '0' : `$O${r - 1}`; // CAD basis per single unit
 
     // FX→CAD on the trade date (see historicalCadFxFormula); col I currency, col A date.
     const fx = historicalCadFxFormula(`$I${r}`, `$A${r}`);
-    // CAD proceeds = native proceeds/unit x units x multiplier x FX.
+    // CAD trade value (gross magnitude) = price/unit x units x multiplier x FX.
     const proceedsCAD = `=$F${r}*$H${r}*$G${r}*$J${r}`;
 
-    let delta, runningACB, realized;
-    if (leg.action === 'OPEN') {
-      delta = `=$F${r}`;
-      runningACB = `=${prevACB}+$K${r}`;
-      realized = '';
-    } else { // CLOSE
-      delta = `=-$F${r}`;
-      runningACB = `=MAX(0,${prevACB}-(${prevACBUnit}*$F${r}*$G${r}))`;
-      // Realized = CAD proceeds − (CAD ACB/unit × units × multiplier).
-      realized = `=$K${r}-(${prevACBUnit}*$F${r}*$G${r})`;
-    }
+    // Signed position delta: + for a buy, − for a sell (so a sell-to-open goes short).
+    const delta = leg.side > 0 ? `=$F${r}` : `=-$F${r}`;
     const runningUnits = `=${prevUnits}+$L${r}`;
-    // ACB/unit is per single share/contract (multiplier-free), so close rows multiply it back.
+
+    // A leg "opens" (adds exposure) when the position is flat or the trade is the same sign as
+    // the current position; otherwise it "closes" (reduces) and realizes P/L. This handles both
+    // long (buy-to-open / sell-to-close) and short (sell-to-open / buy-to-close) round trips.
+    const isOpening = `OR(${prevUnits}=0,SIGN($L${r})=SIGN(${prevUnits}))`;
+    // Opening: basis moves by the signed cash (buy adds cost +, sell adds credit −). Closing:
+    // basis unwinds proportionally at the prior per-unit basis.
+    const runningACB = `=IF(${isOpening},${prevACB}+SIGN($L${r})*$K${r},${prevACB}+${prevACBUnit}*$L${r}*$G${r})`;
+    // Basis per single unit = signed basis / signed units (so it stays a positive price).
     const acbPerUnit = `=IF($M${r}=0,0,$N${r}/($M${r}*$G${r}))`;
+    // Realized only on a closing leg: gain = side of the position × (trade value − basis of the
+    // units closed). Long: proceeds − cost. Short: premium − buyback.
+    const realized = `=IF(${isOpening},"",SIGN(${prevUnits})*($K${r}-${prevACBUnit}*$F${r}*$G${r}))`;
 
     data.push([
       leg.date, leg.account, leg.instrumentType, leg.symbol, leg.action, leg.units,

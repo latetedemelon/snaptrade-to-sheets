@@ -497,6 +497,30 @@ function testRealizedTrades() {
   assert(approx(eqAmt.units * eqAmt.proceeds * eqAmt.multiplier, 1200), 'equity total reconstructs to amount');
   assert(approx(optAmt.units * optAmt.proceeds * optAmt.multiplier, 1000), 'option total reconstructs to amount');
 
+  // 3. Signed long/short running position + realized P/L (the model the ledger formulas encode).
+  // Short put: sell-to-open 3 @ 2.23 (→ short, running -3), buy-to-close 3 @ 1.82 (→ flat, +123).
+  const shortLegs = buildRealizedLegs([
+    { type: 'SELL_TO_OPEN', option_symbol: opt('SOFI 260821P00016000'), units: 3, price: 2.23, multiplier: 100, trade_date: '2023-06-01', currency: { code: 'USD' } },
+    { type: 'BUY_TO_CLOSE', option_symbol: opt('SOFI 260821P00016000'), units: 3, price: 1.82, multiplier: 100, trade_date: '2023-07-01', currency: { code: 'USD' } },
+  ]);
+  assert(shortLegs[0].side === -1, 'sell-to-open side is -1 (short)');
+  assert(shortLegs[1].side === 1, 'buy-to-close side is +1 (cover)');
+  const shortRows = computeRealizedRows(shortLegs);
+  assert(shortRows[0].runningUnits === -3, `short opens to -3 (got ${shortRows[0].runningUnits})`);
+  assert(shortRows[0].realized === null, 'opening leg realizes nothing');
+  assert(shortRows[1].runningUnits === 0, `short covers to 0 (got ${shortRows[1].runningUnits})`);
+  assert(approx(shortRows[1].realized, 123), `short realized +123 (got ${shortRows[1].realized})`); // (2.23-1.82)*3*100
+
+  // Long call: buy-to-open 2 @ 3.5 (running +2), sell-to-close 2 @ 5.0 (flat, +300).
+  const longLegs = buildRealizedLegs([
+    { type: 'BUY_TO_OPEN', option_symbol: opt('AAPL 240119C00150000'), units: 2, price: 3.5, multiplier: 100, trade_date: '2023-06-01', currency: { code: 'USD' } },
+    { type: 'SELL_TO_CLOSE', option_symbol: opt('AAPL 240119C00150000'), units: 2, price: 5.0, multiplier: 100, trade_date: '2023-07-01', currency: { code: 'USD' } },
+  ]);
+  const longRows = computeRealizedRows(longLegs);
+  assert(longRows[0].runningUnits === 2, `long opens to +2 (got ${longRows[0].runningUnits})`);
+  assert(longRows[1].runningUnits === 0, `long closes to 0 (got ${longRows[1].runningUnits})`);
+  assert(approx(longRows[1].realized, 300), `long realized +300 (got ${longRows[1].realized})`); // (5.0-3.5)*2*100
+
   Logger.log('[TEST] ✓ Realized trades test passed');
   return {
     legs: legs.length,
