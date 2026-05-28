@@ -68,44 +68,49 @@ function refreshSummary() {
     ytd(7, 'Realized FX (CAD)', 'Forex Ledger', 'L', { col: 'D', val: 'Dispose' });
     ytd(10, 'Fees (CAD)', 'Fees', 'H');
 
-    // --- Hidden helper queries (cols N..R) feed the charts ---
-    // Net worth over time: total CAD per calendar day from Account History.
+    // --- Hidden helper queries feed the charts. Each goes in its OWN column block (N:O, Q:R,
+    // T:U) starting at row 1, so a chart range for one never overlaps another's data. ---
     sheet.getRange('N1').setFormula(
       "=IFERROR(QUERY('Account History'!A2:H,\"select toDate(A), sum(H) where A is not null group by toDate(A) order by toDate(A) label toDate(A) 'Date', sum(H) 'Net Worth (CAD)'\"),\"Refresh Accounts to build history\")"
     );
-    // Allocation by account and by currency (CAD).
-    sheet.getRange('N40').setFormula(
+    sheet.getRange('Q1').setFormula(
       "=IFERROR(QUERY('Accounts'!A2:H,\"select B, sum(H) where B is not null group by B order by sum(H) desc label B 'Account', sum(H) 'Value (CAD)'\"),\"Refresh Accounts\")"
     );
-    sheet.getRange('Q40').setFormula(
+    sheet.getRange('T1').setFormula(
       "=IFERROR(QUERY('Accounts'!A2:H,\"select G, sum(H) where G is not null group by G order by sum(H) desc label G 'Currency', sum(H) 'Value (CAD)'\"),\"Refresh Accounts\")"
     );
+    SpreadsheetApp.flush(); // evaluate the QUERYs so their spilled heights can be measured
 
-    // --- Net worth over time chart ---
+    const nwHeight = summaryColHeight_(sheet, 14);   // N
+    const acctHeight = summaryColHeight_(sheet, 17); // Q
+    const curHeight = summaryColHeight_(sheet, 20);  // T
+    // Date-format the net-worth date column so the chart renders a date axis (not serials).
+    if (nwHeight > 1) sheet.getRange(2, 14, nwHeight - 1, 1).setNumberFormat(CONFIG.SHEETS.DATE_FORMAT);
+
+    // --- Net worth over time chart (range bounded to the series, not the whole column) ---
     sheet.getRange('A11').setValue('Net Worth Over Time (CAD)').setFontWeight('bold').setFontSize(12);
-    const lineChart = sheet.newChart()
+    sheet.insertChart(sheet.newChart()
       .setChartType(Charts.ChartType.LINE)
-      .addRange(sheet.getRange('N1:O500'))
+      .addRange(sheet.getRange(1, 14, Math.max(nwHeight, 2), 2)) // N1:O{height}
       .setNumHeaders(1)
       .setOption('title', 'Net Worth (CAD)')
       .setOption('legend', { position: 'none' })
       .setOption('width', 920).setOption('height', 320)
       .setPosition(12, 1, 0, 0)
-      .build();
-    sheet.insertChart(lineChart);
+      .build());
 
-    // --- Allocation pies ---
+    // --- Allocation pies (each bounded to its own block) ---
     sheet.getRange('A30').setValue('Allocation by Account').setFontWeight('bold').setFontSize(12);
     sheet.getRange('G30').setValue('Allocation by Currency').setFontWeight('bold').setFontSize(12);
     sheet.insertChart(sheet.newChart()
       .setChartType(Charts.ChartType.PIE)
-      .addRange(sheet.getRange('N40:O200')).setNumHeaders(1)
+      .addRange(sheet.getRange(1, 17, Math.max(acctHeight, 2), 2)).setNumHeaders(1) // Q1:R{height}
       .setOption('title', 'By Account').setOption('pieHole', 0.4)
       .setOption('width', 440).setOption('height', 280)
       .setPosition(31, 1, 0, 0).build());
     sheet.insertChart(sheet.newChart()
       .setChartType(Charts.ChartType.PIE)
-      .addRange(sheet.getRange('Q40:R200')).setNumHeaders(1)
+      .addRange(sheet.getRange(1, 20, Math.max(curHeight, 2), 2)).setNumHeaders(1) // T1:U{height}
       .setOption('title', 'By Currency').setOption('pieHole', 0.4)
       .setOption('width', 440).setOption('height', 280)
       .setPosition(31, 7, 0, 0).build());
@@ -121,7 +126,7 @@ function refreshSummary() {
     // Cosmetics: widen the visible columns and hide the helper columns.
     sheet.setColumnWidths(1, 12, 95);
     sheet.setColumnWidth(1, 150);
-    sheet.hideColumns(14, 5); // N..R helper queries
+    sheet.hideColumns(14, 8); // N..U helper queries
 
     SpreadsheetApp.flush();
     SpreadsheetApp.getUi().alert(
@@ -132,4 +137,22 @@ function refreshSummary() {
     debugLog('refreshSummary', 'error', error.stack || error.message);
     SpreadsheetApp.getUi().alert(`Error building summary: ${error.message}`);
   }
+}
+
+/**
+ * Number of populated rows (from row 1) in a column — used to bound a chart's data range to a
+ * spilled QUERY result instead of grabbing the whole column (which could swallow other data).
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {number} col - 1-based column index
+ * @returns {number} last populated row index (≥ 1)
+ */
+function summaryColHeight_(sheet, col) {
+  const last = sheet.getLastRow();
+  if (last < 1) return 1;
+  const values = sheet.getRange(1, col, last, 1).getValues();
+  let height = 1;
+  for (let i = 0; i < values.length; i++) {
+    if (values[i][0] !== '' && values[i][0] !== null) height = i + 1;
+  }
+  return height;
 }
